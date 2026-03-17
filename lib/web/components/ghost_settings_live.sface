@@ -1,0 +1,207 @@
+<div class="space-y-6 p-3">
+  {!-- Header --}
+  <div class="flex items-center justify-between">
+    <div>
+      <h2 class="text-2xl font-bold">{l("Ghost Blog Integration")}</h2>
+      <p class="text-base-content/70">{l("Connect and manage your Ghost blog")}</p>
+    </div>
+    <button :if={@settings} class="btn btn-ghost btn-sm gap-2" phx-click="refresh">
+      <span class="iconify" data-icon="heroicons:arrow-path-20-solid" />
+      {l("Refresh")}
+    </button>
+  </div>
+
+  {!-- Loading State --}
+  {#if @loading}
+    <div class="flex items-center justify-center py-12">
+      <span class="loading loading-spinner loading-lg" />
+    </div>
+
+    {!-- Not Configured State --}
+  {#elseif is_nil(@settings)}
+    <div class="alert">
+      <span class="iconify text-xl" data-icon="heroicons:exclamation-triangle" />
+      <div>
+        <h3 class="font-bold">{l("Ghost not configured")}</h3>
+        <p class="text-sm">{l("Set the following environment variables to connect your Ghost blog:")}</p>
+        <pre class="mt-2 text-xs bg-base-200 p-3 rounded overflow-x-auto">GHOST_URL=https://your-blog.ghost.io
+GHOST_CONTENT_API_KEY=your_content_api_key
+GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
+      </div>
+    </div>
+
+    {!-- Connected State --}
+  {#else}
+    {!-- Blog Details Card --}
+    <div class="card bg-base-100 border border-base-content/10">
+      {#if cover_image = @settings["cover_image"]}
+        <figure class="h-32 overflow-hidden">
+          <img src={cover_image} alt="" class="w-full object-cover">
+        </figure>
+      {/if}
+      <div class="card-body">
+        <div class="flex items-start gap-4">
+          {#if logo = @settings["logo"] || @settings["icon"]}
+            <img src={logo} alt="" class="w-16 h-16 rounded object-contain bg-base-200">
+          {#else}
+            <div class="w-16 h-16 rounded bg-base-200 flex items-center justify-center">
+              <span class="iconify text-3xl text-base-content/50" data-icon="simple-icons:ghost" />
+            </div>
+          {/if}
+          <div class="flex-1">
+            <h3 class="card-title text-xl">
+              {@settings["title"] || l("Untitled Blog")}
+              <span class="badge badge-sm">{@settings["version"]}</span>
+            </h3>
+            <p :if={desc = @settings["description"]} class="text-base-content/70">{desc}</p>
+            <a
+              href={@settings["url"]}
+              target="_blank"
+              rel="noopener"
+              class="link link-primary text-sm flex items-center gap-1 mt-1"
+            >
+              {@settings["url"]}
+              <span class="iconify" data-icon="heroicons:arrow-top-right-on-square-20-solid" />
+            </a>
+          </div>
+        </div>
+
+        <div class="divider my-2" />
+
+        {!-- Blog Stats/Info --}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div>
+            <span class="text-base-content/60">{l("Language")}</span>
+            <p class="font-medium">{@settings["locale"] || @settings["lang"] || "-"}</p>
+          </div>
+          <div>
+            <span class="text-base-content/60">{l("Timezone")}</span>
+            <p class="font-medium">{@settings["timezone"] || "-"}</p>
+          </div>
+          <div>
+            <span class="text-base-content/60">{l("Members")}</span>
+            <p class="font-medium">
+              {#if @settings["members_enabled"]}
+                <span class="text-success">{l("Enabled")}</span>
+              {#else}
+                <span class="text-base-content/50">{l("Disabled")}</span>
+              {/if}
+            </p>
+          </div>
+          <div>
+            <span class="text-base-content/60">{l("Paid Tiers")}</span>
+            <p class="font-medium">
+              {#if @settings["paid_members_enabled"]}
+                <span class="text-success">{l("Enabled")}</span>
+              {#else}
+                <span class="text-base-content/50">{l("Disabled")}</span>
+              {/if}
+            </p>
+          </div>
+        </div>
+
+        {#if accent = @settings["accent_color"]}
+          <div class="flex items-center gap-2 mt-2">
+            <span class="text-base-content/60 text-sm">{l("Accent Color")}</span>
+            <span class="w-5 h-5 rounded" style={"background-color: #{accent}"} />
+            <span class="text-sm font-mono">{accent}</span>
+          </div>
+        {/if}
+      </div>
+    </div>
+
+    {!-- Members Section --}
+    {#if Bonfire.Ghost.admin_configured?()}
+      <div class="card bg-base-100 border border-base-content/10">
+        <div class="card-body">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="card-title">
+              {l("Members")}
+              {#if @page_info}
+                <span class="badge badge-ghost">{@page_info.total}</span>
+              {/if}
+            </h3>
+          </div>
+
+          {#if @members == []}
+            <div class="text-center py-8 text-base-content/60">
+              <span class="iconify text-4xl mb-2" data-icon="heroicons:users" />
+              <p>{l("No members found")}</p>
+            </div>
+          {#else}
+            <div class="overflow-x-auto">
+              <table class="table table-zebra w-full">
+                <thead>
+                  <tr>
+                    <th>{l("Email")}</th>
+                    <th>{l("Name")}</th>
+                    <th>{l("Status")}</th>
+                    <th>{l("Subscribed")}</th>
+                    <th>{l("Joined")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#for member <- @members}
+                    <tr>
+                      <td>
+                        <span class="font-mono text-sm">{member["email"]}</span>
+                      </td>
+                      <td>{member["name"] || "-"}</td>
+                      <td>
+                        <span class={"badge badge-sm #{status_badge_class(member["status"])}"}>
+                          {member["status"]}
+                        </span>
+                      </td>
+                      <td>
+                        {#if member["subscribed"]}
+                          <span class="text-success">
+                            <span class="iconify" data-icon="heroicons:check-circle-solid" />
+                          </span>
+                        {#else}
+                          <span class="text-base-content/30">
+                            <span class="iconify" data-icon="heroicons:minus-circle" />
+                          </span>
+                        {/if}
+                      </td>
+                      <td class="text-sm text-base-content/70">
+                        {format_date(member["created_at"])}
+                      </td>
+                    </tr>
+                  {/for}
+                </tbody>
+              </table>
+            </div>
+
+            {!-- Load More --}
+            {#if @page_info && @page_info.has_next}
+              <div class="flex justify-center mt-4">
+                <button class="btn btn-ghost btn-sm" phx-click="load_more">
+                  {l("Load more")}
+                </button>
+              </div>
+            {/if}
+          {/if}
+        </div>
+      </div>
+    {#else}
+      <div class="alert">
+        <span class="iconify" data-icon="heroicons:information-circle" />
+        <div>
+          <h3 class="font-bold">{l("Admin API not configured")}</h3>
+          <p class="text-sm">{l("Set GHOST_ADMIN_API_KEY to access member data")}</p>
+        </div>
+      </div>
+    {/if}
+  {/if}
+
+  {!-- Error Display --}
+  {#if @error}
+    <div class="alert alert-error">
+      <span class="iconify" data-icon="heroicons:exclamation-circle" />
+      <div>
+        <h3 class="font-bold">{l("Error")}</h3>
+        <p class="text-sm">{inspect(@error)}</p>
+      </div>
+    </div>
+  {/if}
+</div>

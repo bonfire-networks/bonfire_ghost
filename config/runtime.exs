@@ -1,3 +1,3 @@
 import Config
 
-Bonfire.ExtensionTemplate.RuntimeConfig.config()
+Bonfire.Ghost.RuntimeConfig.config()

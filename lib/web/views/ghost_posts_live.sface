@@ -1,0 +1,124 @@
+<div class="max-w-4xl mx-auto p-4">
+  <div class="mb-8">
+    <h1 class="text-3xl font-bold">{l("Ghost Blog")}</h1>
+    <p class="text-base-content/70 mt-2">{l("Posts from your connected Ghost blog")}</p>
+  </div>
+
+  {#if not @ghost_configured}
+    <div class="alert alert-warning">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        class="stroke-current shrink-0 h-6 w-6"
+        fill="none"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+        />
+      </svg>
+      <div>
+        <h3 class="font-bold">{l("Ghost not configured")}</h3>
+        <p class="text-sm">{l("Add your Ghost URL and Content API key to the configuration to connect your blog.")}</p>
+        <pre class="mt-2 text-xs bg-base-200 p-2 rounded">
+config :bonfire_ghost,
+  ghost_url: "https://your-blog.ghost.io",
+  content_api_key: "your_api_key"</pre>
+      </div>
+    </div>
+  {#elseif @loading}
+    <div class="flex items-center justify-center py-12">
+      <span class="loading loading-spinner loading-lg" />
+      <span class="ml-3">{l("Loading posts...")}</span>
+    </div>
+  {#elseif @error}
+    <div class="alert alert-error">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        class="stroke-current shrink-0 h-6 w-6"
+        fill="none"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"
+        />
+      </svg>
+      <div>
+        <h3 class="font-bold">{l("Error loading posts")}</h3>
+        <p class="text-sm">{inspect(@error)}</p>
+      </div>
+    </div>
+  {#elseif @posts == []}
+    <div class="text-center py-12 text-base-content/60">
+      <p>{l("No posts found in your Ghost blog.")}</p>
+    </div>
+  {#else}
+    <div class="space-y-6">
+      {#for post <- @posts}
+        <article class="card bg-base-100 shadow-sm border border-base-300">
+          {#if feature_image = post["feature_image"]}
+            <figure>
+              <img src={feature_image} alt={post["title"]} class="w-full h-48 object-cover">
+            </figure>
+          {/if}
+          <div class="card-body">
+            <h2 class="card-title">
+              <a href={post["url"]} target="_blank" rel="noopener" class="hover:text-primary transition-colors">
+                {post["title"]}
+              </a>
+            </h2>
+
+            <div class="flex items-center gap-2 text-sm text-base-content/60">
+              {#if published_at = post["published_at"]}
+                <time datetime={published_at}>
+                  {format_date(published_at)}
+                </time>
+              {/if}
+              {#if reading_time = post["reading_time"]}
+                <span>·</span>
+                <span>{reading_time} {l("min read")}</span>
+              {/if}
+            </div>
+
+            {#if excerpt = post["excerpt"]}
+              <p class="text-base-content/80 mt-2">{excerpt}</p>
+            {/if}
+
+            {#if tags = post["tags"]}
+              <div class="flex flex-wrap gap-2 mt-3">
+                {#for tag <- tags}
+                  <span class="badge badge-outline badge-sm">{tag["name"]}</span>
+                {/for}
+              </div>
+            {/if}
+
+            <div class="card-actions justify-end mt-4">
+              <a href={post["url"]} target="_blank" rel="noopener" class="btn btn-primary btn-sm">
+                {l("Read on Ghost")}
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  class="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                  />
+                </svg>
+              </a>
+            </div>
+          </div>
+        </article>
+      {/for}
+    </div>
+  {/if}
+</div>
