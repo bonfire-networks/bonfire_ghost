@@ -1,34 +1,36 @@
 defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   @moduledoc """
-  Settings page for the Ghost extension.
+  Settings component for the Ghost extension.
 
   Displays:
   - Connected Ghost blog details (title, URL, version, etc.)
   - Table of members/subscribers
   """
-  use Bonfire.UI.Common.Web, :surface_live_view
+  use Bonfire.UI.Common.Web, :stateful_component
 
-  on_mount {LivePlugs, [Bonfire.UI.Me.LivePlugs.LoadCurrentUser]}
+  declare_settings_component(l("Ghost"),
+    icon: "bi:newspaper",
+    description: l("Configure Ghost blog integration and view members")
+  )
 
   alias Bonfire.Ghost
 
-  def mount(_params, _session, socket) do
-    socket =
-      socket
-      |> assign(
-        page_title: l("Ghost Settings"),
-        nav_items: [Bonfire.UI.Me.InstanceSidebarSettingsNavLive.declared_nav()],
-        selected_tab: "ghost",
-        settings: nil,
-        members: [],
-        page_info: nil,
-        loading: true,
-        error: nil
-      )
+  prop scope, :any, default: nil
+  data settings, :any, default: nil
+  data members, :list, default: []
+  data tiers, :list, default: []
+  data page_info, :any, default: nil
+  data loading, :boolean, default: true
+  data error, :any, default: nil
+
+  def update(assigns, socket) do
+    socket = assign(socket, assigns)
 
     socket =
-      if connected?(socket) do
-        load_ghost_data(socket)
+      if not Map.get(socket.assigns, :loaded, false) do
+        socket
+        |> load_ghost_data()
+        |> assign(:loaded, true)
       else
         socket
       end
@@ -39,6 +41,7 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   defp load_ghost_data(socket) do
     socket
     |> load_settings()
+    |> load_tiers()
     |> load_members()
     |> assign(:loading, false)
   end
@@ -53,6 +56,20 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
 
       {:error, reason} ->
         assign(socket, error: reason)
+    end
+  end
+
+  defp load_tiers(socket) do
+    if Ghost.admin_configured?() do
+      case Ghost.list_tiers(include: "benefits,monthly_price,yearly_price") do
+        {:ok, %{"tiers" => tiers}} ->
+          assign(socket, :tiers, tiers)
+
+        {:error, reason} ->
+          assign(socket, tiers: [], error: reason)
+      end
+    else
+      socket
     end
   end
 
@@ -119,6 +136,24 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
         iso_string
     end
   end
+
+  def format_price(nil, _currency), do: "-"
+
+  def format_price(cents, currency) when is_integer(cents) do
+    major = div(cents, 100)
+    minor = rem(cents, 100)
+
+    symbol =
+      case String.upcase(currency || "usd") do
+        "EUR" -> "€"
+        "GBP" -> "£"
+        _ -> "$"
+      end
+
+    "#{symbol}#{major}.#{String.pad_leading(Integer.to_string(minor), 2, "0")}"
+  end
+
+  def format_price(_, _), do: "-"
 
   def status_badge_class(status) do
     case status do

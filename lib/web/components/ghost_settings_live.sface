@@ -1,11 +1,11 @@
-<div class="space-y-6 p-3">
+<div class="space-y-6">
   {!-- Header --}
   <div class="flex items-center justify-between">
-    <div>
+    <!-- <div>
       <h2 class="text-2xl font-bold">{l("Ghost Blog Integration")}</h2>
       <p class="text-base-content/70">{l("Connect and manage your Ghost blog")}</p>
-    </div>
-    <button :if={@settings} class="btn btn-ghost btn-sm gap-2" phx-click="refresh">
+    </div> -->
+    <button :if={@settings} class="btn btn-primary btn-sm gap-2" phx-click="refresh">
       <span class="iconify" data-icon="heroicons:arrow-path-20-solid" />
       {l("Refresh")}
     </button>
@@ -110,6 +110,75 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
       </div>
     </div>
 
+    {!-- Tiers Section --}
+    {#if @tiers != []}
+      <div class="card bg-base-100 border border-base-content/10">
+        <div class="card-body">
+          <h3 class="card-title mb-4">
+            {l("Membership Tiers")}
+            <span class="badge badge-ghost">{length(@tiers)}</span>
+          </h3>
+
+          <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {#for tier <- @tiers}
+              <div class={
+                "card border transition-shadow hover:shadow-md",
+                "border-base-content/10": tier["active"],
+                "border-base-content/5 opacity-60": !tier["active"]
+              }>
+                <div class="card-body p-4 gap-1">
+                  <div class="flex items-center justify-between gap-2">
+                    <h4 class="font-semibold text-lg">{tier["name"]}</h4>
+                    <div class="flex gap-1 shrink-0">
+                      {#if !tier["active"]}
+                        <span class="badge badge-xs badge-warning">{l("archived")}</span>
+                      {/if}
+                      {#if tier["visibility"] == "none"}
+                        <span class="badge badge-xs badge-ghost">{l("hidden")}</span>
+                      {/if}
+                    </div>
+                  </div>
+
+                  {#if desc = tier["description"]}
+                    <p class="text-sm text-base-content/70">{desc}</p>
+                  {/if}
+
+                  <div class="mt-auto pt-3">
+                    {#if tier["type"] == "paid"}
+                      <div class="flex items-baseline gap-1 flex-wrap">
+                        <span class="text-2xl font-bold">{format_price(tier["monthly_price"], tier["currency"])}</span>
+                        <span class="text-sm text-base-content/50">/{l("mo")}</span>
+                      </div>
+                      {#if tier["yearly_price"]}
+                        <p class="text-sm text-base-content/50 mt-0.5">
+                          {format_price(tier["yearly_price"], tier["currency"])}/{l("yr")}
+                        </p>
+                      {/if}
+                    {#else}
+                      <span class="text-2xl font-bold">{l("Free")}</span>
+                    {/if}
+                  </div>
+
+                  {#if benefits = tier["benefits"]}
+                    {#if benefits != []}
+                      <ul class="mt-3 space-y-1 border-t border-base-content/5 pt-3">
+                        {#for benefit <- benefits}
+                          <li class="flex items-center gap-2 text-sm">
+                            <span class="iconify text-success shrink-0" data-icon="heroicons:check-20-solid" />
+                            {benefit}
+                          </li>
+                        {/for}
+                      </ul>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
+            {/for}
+          </div>
+        </div>
+      </div>
+    {/if}
+
     {!-- Members Section --}
     {#if Bonfire.Ghost.admin_configured?()}
       <div class="card bg-base-100 border border-base-content/10">
@@ -154,13 +223,9 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
                       </td>
                       <td>
                         {#if member["subscribed"]}
-                          <span class="text-success">
-                            <span class="iconify" data-icon="heroicons:check-circle-solid" />
-                          </span>
+                          <span class="iconify text-lg text-success" data-icon="heroicons:check-circle-solid" />
                         {#else}
-                          <span class="text-base-content/30">
-                            <span class="iconify" data-icon="heroicons:minus-circle" />
-                          </span>
+                          <span class="iconify text-lg text-base-content/30" data-icon="heroicons:x-circle-solid" />
                         {/if}
                       </td>
                       <td class="text-sm text-base-content/70">
