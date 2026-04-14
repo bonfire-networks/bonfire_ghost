@@ -5,7 +5,12 @@
       <h2 class="text-2xl font-bold">{l("Ghost Blog Integration")}</h2>
       <p class="text-base-content/70">{l("Connect and manage your Ghost blog")}</p>
     </div> -->
-    <button :if={@settings} class="btn btn-primary btn-sm gap-2" phx-click="refresh">
+    <button
+      :if={@settings}
+      class="btn btn-primary btn-sm gap-2"
+      phx-click="Bonfire.Ghost:refresh"
+      phx-target={@myself}
+    >
       <span class="iconify" data-icon="heroicons:arrow-path-20-solid" />
       {l("Refresh")}
     </button>
@@ -114,10 +119,49 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
     {#if @tiers != []}
       <div class="card bg-base-100 border border-base-content/10">
         <div class="card-body">
-          <h3 class="card-title mb-4">
-            {l("Membership Tiers")}
-            <span class="badge badge-ghost">{length(@tiers)}</span>
-          </h3>
+          <div class="flex items-center justify-between mb-4 gap-4 flex-wrap">
+            <h3 class="card-title">
+              {l("Membership Tiers")}
+              <span class="badge badge-ghost">{length(@tiers)}</span>
+            </h3>
+            <div class="flex items-center gap-3">
+              {#if @last_sync}
+                <span class="text-xs text-base-content/60">
+                  {l("Last sync")}: {format_date(DateTime.to_iso8601(@last_sync.at))} ·
+                  {l("%{n} new", n: @last_sync.summary.created)},
+                  {l("%{n} refreshed", n: @last_sync.summary.updated)},
+                  {l("%{n} unchanged", n: @last_sync.summary.unchanged)}
+                  {#if @last_sync.summary.archived > 0}
+                    , {l("%{n} archived", n: @last_sync.summary.archived)}
+                  {/if}
+                  {#if @last_sync.summary.errors != []}
+                    , {l("%{n} error(s)", n: length(@last_sync.summary.errors))}
+                  {/if}
+                </span>
+              {/if}
+              <button
+                id="ghost-sync-tiers"
+                class="btn btn-primary btn-sm gap-2"
+                phx-click="Bonfire.Ghost:sync_tiers"
+                phx-target={@myself}
+                disabled={@syncing}
+              >
+                {#if @syncing}
+                  <span class="loading loading-spinner loading-xs" />
+                  {l("Syncing…")}
+                {#else}
+                  <span class="iconify" data-icon="heroicons:arrow-path-rounded-square-20-solid" />
+                  {l("Sync tiers")}
+                {/if}
+              </button>
+            </div>
+          </div>
+
+          <p class="text-sm text-base-content/70 mb-4">
+            {l(
+              "Turn each Ghost tier into a Bonfire circle + role. Admins can then edit the role's permissions from the Roles settings page."
+            )}
+          </p>
 
           <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {#for tier <- @tiers}
@@ -240,7 +284,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             {!-- Load More --}
             {#if @page_info && @page_info.has_next}
               <div class="flex justify-center mt-4">
-                <button class="btn btn-ghost btn-sm" phx-click="load_more">
+                <button class="btn btn-ghost btn-sm" phx-click="Bonfire.Ghost:load_more" phx-target={@myself}>
                   {l("Load more")}
                 </button>
               </div>
