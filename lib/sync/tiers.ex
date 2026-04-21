@@ -25,7 +25,9 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   alias Bonfire.Boundaries.Circles
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
   alias Bonfire.Common.Repo
+  alias Bonfire.Data.Identity.ExtraInfo
   alias Bonfire.Ghost
+  alias Ecto.Changeset
 
   @circle_prefix "ghost_tier:"
 
@@ -34,12 +36,6 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   @slug_regex ~r/\A[a-z0-9][a-z0-9_-]{0,63}\z/
 
   @archived_marker " (archived)"
-
-  # `Circles.edit/3` runs params through `Enums.input_to_atoms`, which silently
-  # drops string keys whose atom doesn't already exist in the BEAM atom table
-  # (turning them into `nil` keys). Declaring them here as a module attribute
-  # ensures they're present before `info` is ever cast, so the keys survive.
-  @info_atoms [:ghost_tier_slug, :ghost_tier_id, :display_name]
 
   @type sync_summary :: %{
           created: non_neg_integer(),
@@ -101,16 +97,15 @@ defmodule Bonfire.Ghost.Sync.Tiers do
 
   def sync_tier(
         %{"slug" => slug, "name" => name, "id" => ghost_tier_id},
-        opts
+        _opts
       )
       when is_binary(slug) and is_binary(name) do
     if Regex.match?(@slug_regex, slug) do
       circle_name = @circle_prefix <> slug
-      scoped_opts = Keyword.put(opts, :scope, :instance)
 
-      with {:ok, _circle, state} <-
-             ensure_circle(circle_name, name, slug, ghost_tier_id, scoped_opts) do
-        {:ok, state}
+      case ensure_circle(circle_name, name, slug, ghost_tier_id) do
+        {:ok, _circle, state} -> {:ok, state}
+        {:error, reason} -> {:error, reason}
       end
     else
       error(slug, "Ghost tier slug failed validation — refusing to use as circle name")
@@ -125,10 +120,10 @@ defmodule Bonfire.Ghost.Sync.Tiers do
 
   # --- Circle --------------------------------------------------------------
 
-  defp ensure_circle(circle_name, display_name, slug, ghost_tier_id, opts) do
+  defp ensure_circle(circle_name, display_name, slug, ghost_tier_id) do
     case Circles.get_by_name(circle_name, InstanceScaffold.admin_circle()) do
       {:ok, circle} ->
-        maybe_refresh_circle(circle, display_name, slug, ghost_tier_id, opts)
+        maybe_refresh_circle(circle, display_name, slug, ghost_tier_id)
 
       {:error, :not_found} ->
         attrs = %{
@@ -145,7 +140,7 @@ defmodule Bonfire.Ghost.Sync.Tiers do
     end
   end
 
-  defp maybe_refresh_circle(circle, display_name, slug, ghost_tier_id, opts) do
+  defp maybe_refresh_circle(circle, display_name, slug, ghost_tier_id) do
     # `Circles.get_by_name` preloads `:named` + `:caretaker` but not `:extra_info`
     circle = Repo.maybe_preload(circle, :extra_info)
     expected_summary = circle_summary(display_name)
@@ -153,23 +148,26 @@ defmodule Bonfire.Ghost.Sync.Tiers do
 
     current = extra_info(circle)
 
-    if current.summary == expected_summary and current.info == expected_info do
+    if current.summary == expected_summary and maps_equivalent?(current.info, expected_info) do
       {:ok, circle, :unchanged}
     else
-      update_circle_extra_info(circle, expected_summary, expected_info, opts)
+      update_extra_info(circle, expected_summary, expected_info)
     end
   end
 
-  # `Circles.edit/3` re-casts every Circle has-one association, so we must echo
-  # the existing `:named` back even though we're only changing `:extra_info` —
-  # otherwise Ecto's `cast_assoc(:named)` tries to replace the loaded mixin
-  # with an empty record and crashes on the NOT NULL id constraint.
-  defp update_circle_extra_info(circle, summary, info, opts) do
-    user = Keyword.get(opts, :current_user)
-    attrs = %{named: %{name: circle.named.name}, extra_info: %{summary: summary, info: info}}
+  # Side-steps `Circles.edit/3` — that path re-casts every Circle has-one
+  # association and requires a `%User{}`, neither of which we want for a
+  # metadata-only sync invoked from a webhook worker with no current user.
+  defp update_extra_info(circle, summary, info) do
+    extra = circle.extra_info || %ExtraInfo{id: circle.id}
 
-    with {:ok, updated} <- Circles.edit(circle, user, attrs) do
-      {:ok, updated, :updated}
+    changeset =
+      extra
+      |> Changeset.cast(%{summary: summary, info: info}, [:summary, :info])
+      |> Changeset.force_change(:id, circle.id)
+
+    with {:ok, updated_extra} <- Repo.insert_or_update(changeset) do
+      {:ok, %{circle | extra_info: updated_extra}, :updated}
     end
   end
 
@@ -181,22 +179,36 @@ defmodule Bonfire.Ghost.Sync.Tiers do
 
   defp circle_summary(display_name), do: "Ghost tier: #{display_name}"
 
+  # Atom keys (not strings): `Circles.create` runs the attrs through
+  # `Enums.input_to_atoms`, which drops string keys whose atom isn't already
+  # registered in the BEAM atom table. Literal atom keys here guarantee they
+  # are registered at module load, so the full info map survives the write.
   defp circle_info(slug, ghost_tier_id, display_name) do
     %{
-      "ghost_tier_slug" => slug,
-      "ghost_tier_id" => ghost_tier_id,
-      "display_name" => display_name
+      ghost_tier_slug: slug,
+      ghost_tier_id: ghost_tier_id,
+      display_name: display_name
     }
   end
 
+  # jsonb roundtrips give us string keys even if we wrote atoms — normalize
+  # before comparing so idempotency holds on re-sync.
+  defp maps_equivalent?(a, b) when is_map(a) and is_map(b),
+    do: stringify_keys(a) == stringify_keys(b)
+
+  defp maps_equivalent?(a, b), do: a == b
+
+  defp stringify_keys(%{} = map),
+    do: Map.new(map, fn {k, v} -> {to_string(k), v} end)
+
   # --- Archived tiers ------------------------------------------------------
 
-  defp archive_orphans(active_slugs, summary, opts) do
+  defp archive_orphans(active_slugs, summary, _opts) do
     Circles.list_my(:instance)
     |> Enum.filter(&ghost_tier_circle?/1)
     |> Enum.reject(&(circle_slug(&1) in active_slugs))
     |> Enum.reduce(summary, fn circle, acc ->
-      case mark_archived(circle, opts) do
+      case mark_archived(circle) do
         {:ok, :archived} -> Map.update!(acc, :archived, &(&1 + 1))
         {:ok, :unchanged} -> acc
         {:error, reason} -> Map.update!(acc, :errors, &[{circle_slug(circle), reason} | &1])
@@ -214,7 +226,7 @@ defmodule Bonfire.Ghost.Sync.Tiers do
 
   defp circle_slug(_), do: nil
 
-  defp mark_archived(circle, opts) do
+  defp mark_archived(circle) do
     # already preloaded by `Circles.list_my/1` → `query/1`
     %{summary: summary, info: info} = extra_info(circle)
     summary = summary || ""
@@ -222,7 +234,7 @@ defmodule Bonfire.Ghost.Sync.Tiers do
     if String.ends_with?(summary, @archived_marker) do
       {:ok, :unchanged}
     else
-      case update_circle_extra_info(circle, summary <> @archived_marker, info, opts) do
+      case update_extra_info(circle, summary <> @archived_marker, info) do
         {:ok, _circle, :updated} -> {:ok, :archived}
         {:error, reason} -> {:error, reason}
       end
