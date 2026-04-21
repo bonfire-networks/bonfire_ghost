@@ -159,7 +159,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
 
           <p class="text-sm text-base-content/70 mb-4">
             {l(
-              "Turn each Ghost tier into a Bonfire circle + role. Admins can then edit the role's permissions from the Roles settings page."
+              "Turn each Ghost tier into a Bonfire circle. Admins can then grant these circles access anywhere in Bonfire's boundaries system."
             )}
           </p>
 

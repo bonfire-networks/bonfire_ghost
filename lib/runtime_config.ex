@@ -7,6 +7,8 @@ defmodule Bonfire.Ghost.RuntimeConfig do
     * `GHOST_URL` - Your Ghost blog URL (e.g., https://your-blog.ghost.io)
     * `GHOST_CONTENT_API_KEY` - Your Ghost Content API key (for public posts)
     * `GHOST_ADMIN_API_KEY` - Your Ghost Admin API key (for members, drafts, etc.)
+    * `GHOST_WEBHOOK_SECRET` - Shared secret Ghost signs webhook payloads with
+      (set the same value in the Ghost admin → Integrations → webhook "Secret" field)
 
   ## How to get API keys
 
@@ -30,12 +32,14 @@ defmodule Bonfire.Ghost.RuntimeConfig do
     ghost_url = System.get_env("GHOST_URL")
     content_api_key = System.get_env("GHOST_CONTENT_API_KEY")
     admin_api_key = System.get_env("GHOST_ADMIN_API_KEY")
+    webhook_secret = System.get_env("GHOST_WEBHOOK_SECRET")
 
     config_opts =
       []
       |> maybe_add(:ghost_url, ghost_url)
       |> maybe_add(:content_api_key, content_api_key)
       |> maybe_add(:admin_api_key, admin_api_key)
+      |> maybe_add(:webhook_secret, webhook_secret)
 
     if config_opts != [] do
       config :bonfire_ghost, config_opts

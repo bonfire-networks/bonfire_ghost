@@ -1,21 +1,18 @@
 defmodule Bonfire.Ghost.Sync.Tiers do
   @moduledoc """
-  Syncs Ghost membership tiers into Bonfire circles + roles + ACLs.
+  Syncs Ghost membership tiers into Bonfire circles.
 
-  For each Ghost tier:
+  For each Ghost tier we ensure a **circle** named `ghost_tier:<slug>` exists
+  at instance scope. Members are added to it later by
+  `Bonfire.Ghost.Sync.Members`. Its `extra_info.summary` is
+  `"Ghost tier: <display_name>"`; `extra_info.info` keeps the slug, Ghost tier
+  id, and display name for diffing on re-sync.
 
-    * A **circle** named `ghost_tier:<slug>` holds the tier's members (populated
-      later by `Bonfire.Ghost.Sync.Members`). Its `extra_info.summary` is
-      "Ghost tier: <display_name>"; `extra_info.info` keeps the slug, Ghost tier
-      id, and display name for diffing on re-sync.
-    * A **role** named `ghost_tier_<slug>` stored at instance scope, seeded with
-      the verbs of the built-in `:participate` role so new grants aren't
-      empty. Admins can then tune verbs from the Roles settings page — re-runs
-      never touch an existing role.
-    * An **ACL** named `ghost_tier_acl:<slug>` with grants tying the role to the
-      circle.
+  This module deliberately does **not** create roles, ACLs, or grants. Admins
+  compose those themselves using these circles as subjects — same as any other
+  circle in Bonfire's boundaries system.
 
-  Re-running the sync is idempotent: it only creates missing pieces, refreshes
+  Re-running the sync is idempotent: it only creates missing circles, refreshes
   the circle's display-name metadata when it drifts from Ghost, and marks any
   orphaned `ghost_tier:*` circles (tier removed upstream) by appending
   "(archived)" to their summary — nothing is ever deleted.
@@ -25,22 +22,15 @@ defmodule Bonfire.Ghost.Sync.Tiers do
 
   import Untangle
 
-  alias Bonfire.Boundaries.Acls
   alias Bonfire.Boundaries.Circles
-  alias Bonfire.Boundaries.Grants
-  alias Bonfire.Boundaries.Roles
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
   alias Bonfire.Common.Repo
   alias Bonfire.Ghost
 
   @circle_prefix "ghost_tier:"
-  @role_prefix "ghost_tier_"
-  @acl_prefix "ghost_tier_acl:"
 
-  # Ghost slugs are lowercase alphanumeric with dashes/underscores; enforce this
-  # before we atomise the role name. Roles at instance scope live in Application
-  # config (keyword list, atom keys), so role names must be atoms — but unbounded
-  # `String.to_atom/1` would be a memory-leak footgun without this regex guard.
+  # Ghost slugs are lowercase alphanumeric with dashes/underscores; enforce
+  # this as basic input sanitation before composing the circle name.
   @slug_regex ~r/\A[a-z0-9][a-z0-9_-]{0,63}\z/
 
   @archived_marker " (archived)"
@@ -62,7 +52,7 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   @empty_summary %{created: 0, updated: 0, unchanged: 0, archived: 0, errors: []}
 
   @doc """
-  Fetches tiers from Ghost and reconciles them with local circles/roles/ACLs.
+  Fetches tiers from Ghost and reconciles them with local circles.
 
   Returns `{:ok, summary, tiers}` on success (the raw Ghost tier payloads are
   returned so the caller can refresh its UI state without re-fetching) or
@@ -81,17 +71,15 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   end
 
   @doc """
-  Reconciles a pre-fetched list of Ghost tier payloads with local boundaries.
+  Reconciles a pre-fetched list of Ghost tier payloads with local circles.
 
   Exposed primarily for tests — production code goes through `sync_all/1`.
   """
   @spec sync_tiers([map()], keyword()) :: sync_summary()
   def sync_tiers(tiers, opts) when is_list(tiers) do
-    acl_index = index_ghost_acls()
-
     summary =
       Enum.reduce(tiers, @empty_summary, fn tier, acc ->
-        case sync_tier(tier, acl_index, opts) do
+        case sync_tier(tier, opts) do
           {:ok, state} when state in [:created, :updated, :unchanged] ->
             Map.update!(acc, state, &(&1 + 1))
 
@@ -109,34 +97,28 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   end
 
   @doc false
-  def sync_tier(tier, acl_index, opts \\ [])
+  def sync_tier(tier, opts \\ [])
 
   def sync_tier(
         %{"slug" => slug, "name" => name, "id" => ghost_tier_id},
-        acl_index,
         opts
       )
       when is_binary(slug) and is_binary(name) do
     if Regex.match?(@slug_regex, slug) do
       circle_name = @circle_prefix <> slug
-      role_name = String.to_atom(@role_prefix <> slug)
-      acl_name = @acl_prefix <> slug
       scoped_opts = Keyword.put(opts, :scope, :instance)
 
-      with {:ok, circle, state} <-
-             ensure_circle(circle_name, name, slug, ghost_tier_id, scoped_opts),
-           :ok <- ensure_role(role_name, scoped_opts),
-           {:ok, acl} <- ensure_acl(acl_name, acl_index),
-           :ok <- apply_grants(circle, acl, role_name, scoped_opts) do
+      with {:ok, _circle, state} <-
+             ensure_circle(circle_name, name, slug, ghost_tier_id, scoped_opts) do
         {:ok, state}
       end
     else
-      error(slug, "Ghost tier slug failed validation — refusing to create atom")
+      error(slug, "Ghost tier slug failed validation — refusing to use as circle name")
       {:error, :invalid_slug}
     end
   end
 
-  def sync_tier(tier, _acl_index, _opts) do
+  def sync_tier(tier, _opts) do
     error(tier, "Ghost tier payload missing slug/name/id")
     {:error, :invalid_tier}
   end
@@ -245,81 +227,5 @@ defmodule Bonfire.Ghost.Sync.Tiers do
         {:error, reason} -> {:error, reason}
       end
     end
-  end
-
-  # --- Role ----------------------------------------------------------------
-
-  # Creates the role at instance scope if missing. We deliberately don't seed
-  # `can_verbs` — pre-populating them via `Settings.put_raw` rewrites the entire
-  # `:role_verbs` Application config tree through the settings hooks, which
-  # corrupts existing role entries and breaks the Roles UI. Empty roles cause
-  # `Grants.change_role` to raise, which `apply_grants/4` rescues silently;
-  # admins assign verbs from the Roles settings page afterwards.
-  #
-  # Reads are rescued because `:role_verbs` in the Application env is a keyword
-  # list with atom keys: one bad entry (e.g. a leftover string key from an older
-  # version) makes `Access.get` raise, which would otherwise take down the whole
-  # sync. On read failure we assume the role is missing and try to create it.
-  defp ensure_role(role_name, opts) do
-    if role_exists?(role_name, opts) do
-      :ok
-    else
-      try do
-        Roles.create(role_name, :ops, opts)
-        :ok
-      rescue
-        e ->
-          warn(e, "Could not create role #{inspect(role_name)}")
-          {:error, :role_create_failed}
-      end
-    end
-  end
-
-  defp role_exists?(role_name, opts) do
-    existing = Roles.get(role_name, opts)
-    is_map(existing) and map_size(existing) > 0
-  rescue
-    e ->
-      warn(e, "Could not read role #{inspect(role_name)} — assuming missing")
-      false
-  end
-
-  # --- ACL -----------------------------------------------------------------
-  #
-  # `Acls` has no by-name lookup, so we build an index of existing ghost-tier
-  # ACLs once per sync and reuse it across tiers.
-
-  defp index_ghost_acls do
-    Acls.list_my(:instance)
-    |> Enum.reduce(%{}, fn acl, acc ->
-      case acl_name(acl) do
-        nil -> acc
-        name -> Map.put(acc, name, acl)
-      end
-    end)
-  end
-
-  defp acl_name(%{named: %{name: name}}) when is_binary(name), do: name
-  defp acl_name(_), do: nil
-
-  defp ensure_acl(acl_name, acl_index) do
-    case Map.get(acl_index, acl_name) do
-      nil -> Acls.simple_create(:instance, acl_name)
-      acl -> {:ok, acl}
-    end
-  end
-
-  # --- Grants --------------------------------------------------------------
-
-  # `Grants.change_role` raises when the role has no verbs configured yet.
-  # The circle+role+ACL structure is still in place for the admin to configure,
-  # so we treat that case as a soft warning.
-  defp apply_grants(circle, acl, role_name, opts) do
-    Grants.change_role(circle.id, acl.id, role_name, opts)
-    :ok
-  rescue
-    e ->
-      warn(e, "apply_grants for #{role_name} skipped (likely empty role)")
-      :ok
   end
 end

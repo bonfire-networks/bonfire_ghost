@@ -20,6 +20,15 @@ defmodule Bonfire.Ghost.Web.Routes do
 
         live("/settings", GhostSettingsLive)
       end
+
+      # Ghost webhook receiver — deliberately outside the :browser pipeline
+      # (no session, no CSRF, no flash). HMAC signature verification runs
+      # as a controller plug; see Bonfire.Ghost.Web.WebhookController.
+      scope "/ghost", Bonfire.Ghost.Web do
+        pipe_through(:basic_json)
+
+        post("/webhook/:event", WebhookController, :member)
+      end
     end
   end
 end
