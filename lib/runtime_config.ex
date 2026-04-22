@@ -59,8 +59,7 @@ defmodule Bonfire.Ghost.RuntimeConfig do
     existing_providers = Application.get_env(:bonfire_ui_me, :login_email_providers, [])
 
     config :bonfire_ui_me,
-      login_email_providers:
-        Enum.uniq(existing_providers ++ [Bonfire.Ghost.LoginEmailProvider])
+      login_email_providers: Enum.uniq(existing_providers ++ [Bonfire.Ghost.LoginEmailProvider])
   end
 
   defp maybe_add(opts, _key, nil), do: opts

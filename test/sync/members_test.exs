@@ -47,9 +47,7 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       setup_tiers([@tier_free, @tier_paid])
 
       {:ok, user} =
-        Members.provision_from_ghost_member(
-          member("tiered@test.local", tiers: [@tier_free])
-        )
+        Members.provision_from_ghost_member(member("tiered@test.local", tiers: [@tier_free]))
 
       circle_ids =
         InstanceScaffold.admin_circle()
@@ -119,12 +117,12 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
   describe "reconcile_circles/2 — tier changes" do
     test "moving a member from one tier to another adds the new and removes the old" do
       setup_tiers([@tier_free, @tier_paid])
-      {:ok, user} =
-        Members.provision_from_ghost_member(
-          member("switch@test.local", tiers: [@tier_free])
-        )
 
-      {:ok, diff} = Members.reconcile_circles(user, member("switch@test.local", tiers: [@tier_paid]))
+      {:ok, user} =
+        Members.provision_from_ghost_member(member("switch@test.local", tiers: [@tier_free]))
+
+      {:ok, diff} =
+        Members.reconcile_circles(user, member("switch@test.local", tiers: [@tier_paid]))
 
       assert diff.added == 1
       assert diff.removed == 1
