@@ -1,8 +1,6 @@
 # Bonfire.Ghost — Architecture & Implementation Notes
 
-Companion to `README.md`. The README is the user-facing config/usage guide; this
-document is for developers who need to touch the sync pipelines, the webhook
-pipeline, or the gated login integration.
+Companion to `README.md`. The README is the user-facing config/usage guide; this document is for developers who need to touch the sync pipelines, the webhook pipeline, or the gated login integration.
 
 ## 1. What this extension does
 
@@ -11,7 +9,7 @@ Two distinct things, bundled because they share the Ghost Admin API client:
 1. **Read-only blog integration.** List/show Ghost posts, surface member data
    in an admin settings page. *(Pre-existing; see `lib/integration.ex` and
    `lib/web/components/ghost_posts_live*`.)*
-2. **Gated-community sync** — the focus of this document. Ghost drives
+2. **Gated-community sync** — the focus of this document. Ghost can drive
    membership on Bonfire:
    - Ghost **tiers** → Bonfire **circles** (`ghost_tier:<slug>`).
    - Ghost **members** → Bonfire **accounts + users + circle memberships**,
@@ -53,7 +51,7 @@ The non-goals are deliberate — see §6 "Key decisions" for the reasoning.
 │                               │      │   LoginLive ──► ForgotPasswordController │
 │                               │      │                     │                   │
 │                               │      │                     ▼ (unknown email)   │
-│                               │      │                LoginEmailProviders ──► Ghost.LoginEmailProvider ──► Sync.Members
+│                               │      │                LoginEmailProvider ──► Ghost.LoginEmailProvider ──► Sync.Members
 └───────────────────────────────┘      └─────────────────────────────────────────┘
 ```
 
@@ -68,7 +66,7 @@ Three hot paths:
 - **Gated login** — if `[:bonfire_ui_me, :login, :passwordless_only]` is true,
   `LoginLive` shows only the email field. Submit posts to
   `ForgotPasswordController.create/2`, which runs
-  `LoginEmailProviders.ensure/1` for unknown emails (Ghost provider
+  `LoginEmailProvider.ensure/1` for unknown emails (Ghost provider
   provisions the account on the fly), then sends a magic link via the
   existing `request_confirm_email(..., confirm_action: :login)` path.
 
@@ -88,7 +86,7 @@ Three hot paths:
 | `lib/web/components/ghost_settings_live.{ex,sface}` | Admin settings page: sync button, gated-mode toggle, last-sync summary. |
 | `lib/web/routes.ex` | Routes — `/ghost` (public), `/ghost/settings` (admin), `/ghost/webhook/:event` (pipe: `:basic_json`). |
 | `lib/login_email_provider.ex` | Adapter implementing `Bonfire.UI.Me.LoginEmailProvider`. Calls `Ghost.get_member_by_email/2` → `Sync.Members.provision_from_ghost_member/1`. |
-| `lib/runtime_config.ex` | Reads env vars, registers `LoginEmailProvider`, sets `passwordless_only` when `GHOST_GATED_MODE` is truthy. |
+| `lib/runtime_config.ex` | Reads env vars, sets `passwordless_only` when `GHOST_GATED_MODE` is truthy. |
 
 ### Outside the extension (touched by this feature)
 
@@ -98,8 +96,8 @@ Three hot paths:
 | `extensions/bonfire_ui_common/lib/endpoint_template.ex:249-254` | Reads `body_reader` MFA from config, default unchanged. |
 | `extensions/jacobin/config/jacobin.exs:36-38` | Jacobin flavour opt-in: `body_reader: {Bonfire.Ghost.BodyReader, :read_body, []}`. |
 | `extensions/bonfire_ui_me/lib/views/login/login_live.{ex,sface}` | `@passwordless_only?` assign; template branches on it. |
-| `extensions/bonfire_ui_me/lib/views/forgot_password/forgot_password_controller.ex` | Runs `LoginEmailProviders.ensure/1` on unknown emails; uses `confirm_action: :login` in passwordless mode. |
-| `extensions/bonfire_ui_me/lib/login_email_providers.ex` | Registry/dispatcher (behaviour defined in `login_email_provider.ex`). |
+| `extensions/bonfire_ui_me/lib/views/forgot_password/forgot_password_controller.ex` | Runs `LoginEmailProvider.ensure/1` on unknown emails; uses `confirm_action: :login` in passwordless mode. |
+| `extensions/bonfire_ui_me/lib/login_email_provider.ex` | `ExtensionBehaviour` — defines callback, auto-discovers implementing modules, runs `ensure/1` |
 
 ## 5. Configuration
 
@@ -139,11 +137,7 @@ up to 5 times with Oban's default backoff.
 
 ### 6.1 Oban over `Task.Supervisor` for webhook work
 
-Bonfire uses Oban everywhere (10 named queues in `config/runtime.exs`). Oban
-gives retries/backoff/dead-lettering for free — important for a webhook
-receiver that can't afford to silently drop a `member.added` event if the
-database is briefly unavailable. We rejected the original plan's
-`Task.Supervisor` approach for consistency and reliability.
+Bonfire uses Oban which gives retries/backoff/dead-lettering for free — important for a webhook receiver that can't afford to silently drop a `member.added` event if the database is briefly unavailable. We rejected the original plan's `Task.Supervisor` approach for consistency and reliability.
 
 ### 6.2 Circles only, no roles/ACLs from tier sync
 
@@ -151,9 +145,8 @@ Early plan revisions created a role + ACL + grant per tier. We dropped that:
 
 - Bonfire's boundaries system is already composable — admins can grant any
   existing circle into any existing ACL.
-- Seeding roles required atom coinage (`String.to_atom("ghost_tier_" <> slug)`)
-  and rescuing `:role_verbs` config corruption.
-- Duplicating boundaries primitives invited drift from the main UI.
+- Seeding roles *should not* require atom coinage (`String.to_atom("ghost_tier_" <> slug)`) and rescuing `:role_verbs` config corruption.
+- Duplicating boundaries primitives would invite drift from the main UI.
 
 The extension now syncs **only** circles. Admins compose access policy
 themselves using those circles as subjects.
@@ -215,10 +208,10 @@ they can set a password or continue requesting magic links).
 ### 6.7 Unknown-email fallback via `LoginEmailProvider` extension point
 
 `ForgotPasswordController.create/2` runs
-`Bonfire.UI.Me.LoginEmailProviders.ensure(email)` when the email isn't
+`Bonfire.UI.Me.LoginEmailProvider.ensure(email)` when the email isn't
 already in the database. This is a plug-point — any extension can implement
 `@behaviour Bonfire.UI.Me.LoginEmailProvider` with an `ensure_account/1`
-callback and get registered through `:bonfire_ui_me, :login_email_providers`.
+callback and get registered automatically.
 
 Ghost's implementation:
 
@@ -343,10 +336,11 @@ Or individual files, e.g.:
 just test extensions/bonfire_ghost/test/sync/members_test.exs
 ```
 
-The `ForgotPasswordController` unknown-email-provider integration test lives
-in `extensions/bonfire_ui_me/test/controllers/forgot_password_test.exs` (3
-cases: unknown email triggers providers, known email does not, blank email
-does not).
+The `ForgotPasswordController` integration test lives in
+`extensions/bonfire_ui_me/test/controllers/forgot_password_test.exs` (3
+cases: unknown email, known email, blank email — all verify the neutral
+response guarantee). Unit tests for the provider runner logic live in
+`extensions/bonfire_ui_me/test/login/login_email_providers_test.exs`.
 
 ## 10. Known gaps & follow-ups
 

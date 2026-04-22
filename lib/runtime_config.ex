@@ -55,11 +55,6 @@ defmodule Bonfire.Ghost.RuntimeConfig do
       # the UI extension never needs to know about Ghost.
       config :bonfire_ui_me, :login, passwordless_only: true
     end
-
-    existing_providers = Application.get_env(:bonfire_ui_me, :login_email_providers, [])
-
-    config :bonfire_ui_me,
-      login_email_providers: Enum.uniq(existing_providers ++ [Bonfire.Ghost.LoginEmailProvider])
   end
 
   defp maybe_add(opts, _key, nil), do: opts

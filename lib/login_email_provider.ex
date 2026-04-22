@@ -2,10 +2,9 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   @moduledoc """
   Adapter implementing `Bonfire.UI.Me.LoginEmailProvider` for Ghost CMS.
 
-  Registered in `config/bonfire_ghost.exs` under
-  `:bonfire_ui_me, :login_email_providers`. Called from
-  `Bonfire.UI.Me.ForgotPasswordController.create/2` when an unknown email is
-  submitted so that a Ghost member with an active tier can seamlessly log in
+  Auto-discovered at startup via `Bonfire.Common.ExtensionBehaviour`. Called
+  from `Bonfire.UI.Me.ForgotPasswordController.create/2` when an unknown email
+  is submitted so that a Ghost member with an active tier can seamlessly log in
   — the local account+user+circles are provisioned on the fly and then the
   standard magic-link flow picks them up.
   """
