@@ -94,6 +94,38 @@ defmodule Bonfire.Ghost.API do
   end
 
   @doc """
+  Gets a single post by its ID.
+
+  ## Examples
+
+      iex> Bonfire.Ghost.API.get_post_by_id(client, "abc123")
+      {:ok, %{posts: [%{...}]}}
+  """
+  def get_post_by_id(client, id, opts \\ []) when is_binary(id) do
+    fields = Keyword.get(opts, :fields, nil)
+
+    params =
+      [include: "tags,authors"]
+      |> then(fn p -> if fields, do: [{:fields, fields} | p], else: p end)
+
+    case Req.get(client, url: "/posts/#{id}/", params: params) do
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        {:ok, body}
+
+      {:ok, %Req.Response{status: 404}} ->
+        {:error, :not_found}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        error(body, "Ghost API error (status #{status})")
+        {:error, {:api_error, status, body}}
+
+      {:error, reason} ->
+        error(reason, "Ghost API request failed")
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Gets the Ghost site settings.
 
   ## Examples

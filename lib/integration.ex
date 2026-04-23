@@ -115,6 +115,12 @@ defmodule Bonfire.Ghost do
     end
   end
 
+  def get_post_by_id(id) when is_binary(id) do
+    with {:ok, c} <- client() do
+      API.get_post_by_id(c, id)
+    end
+  end
+
   @doc """
   Gets the Ghost site settings.
   """
