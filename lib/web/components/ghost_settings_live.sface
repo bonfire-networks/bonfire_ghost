@@ -104,16 +104,45 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             </p>
           </div>
         </div>
-
-        {#if accent = @settings["accent_color"]}
-          <div class="flex items-center gap-2 mt-2">
-            <span class="text-base-content/60 text-sm">{l("Accent Color")}</span>
-            <span class="w-5 h-5 rounded" style={"background-color: #{accent}"} />
-            <span class="text-sm font-mono">{accent}</span>
-          </div>
-        {/if}
       </div>
     </div>
+
+    {!-- Gated Login Mode --}
+    {#if Bonfire.Ghost.admin_configured?()}
+      <div class="card bg-base-100 border border-base-content/10">
+        <div class="card-body gap-4">
+          <form phx-change="Bonfire.Common.Settings:set">
+            <Bonfire.UI.Common.SettingsToggleLive
+              keys={[:bonfire_ui_me, :login, :passwordless_only]}
+              scope={:instance}
+              name={l("Gated login (Ghost members only)")}
+              description={l(
+                "Hide the password and signup forms on the login page. Members existing in Ghost get a passwordless email link instead."
+              )}
+            />
+          </form>
+
+          {#if Bonfire.Common.Settings.get(
+              [:bonfire_ui_me, :login, :passwordless_only],
+              false,
+              :instance
+            ) in [true, "true", "1", "yes"]}
+            <form phx-submit="Bonfire.Common.Settings:save">
+              <Bonfire.UI.Common.SettingsInputLive
+                keys={[:bonfire_ui_me, :login, :external_signup_url]}
+                scope={:instance}
+                name={l("External signup URL")}
+                description={l(
+                  "Optional. When set, a Sign up button is shown next to the login button and redirects to this URL (e.g. your Ghost subscribe page)."
+                )}
+                placeholder="https://your-blog.ghost.io/#/portal/signup"
+                class="input input-bordered input-sm flex-1"
+              />
+            </form>
+          {/if}
+        </div>
+      </div>
+    {/if}
 
     {!-- Tiers Section --}
     {#if @tiers != []}

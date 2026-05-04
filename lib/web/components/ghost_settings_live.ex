@@ -13,7 +13,9 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
 
   declare_settings_component(l("Ghost"),
     icon: "bi:newspaper",
-    description: l("Configure Ghost blog integration and view members")
+    description: l("Configure Ghost blog integration and view members"),
+    # suppress the WidgetsLive wrapper title/description — the parent extension card already shows them
+    data: %{}
   )
 
   prop scope, :any, default: nil

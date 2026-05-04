@@ -41,7 +41,7 @@ defmodule Bonfire.Ghost do
   alias Bonfire.Ghost.AdminAPI
 
   declare_extension(
-    "Bonfire.Ghost",
+    "Ghost blog",
     icon: "bi:newspaper",
     description: l("Ghost blog integration")
   )
