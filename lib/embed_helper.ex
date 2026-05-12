@@ -39,9 +39,11 @@ defmodule Bonfire.Ghost.EmbedHelper do
              {:ok, article} <- fetch_article(slug_or_id),
              {context_type, context} <- resolve_context(group_id, article),
              :ok <- check_topic_requirement(require_topic?, context_type),
+             to_circles =
+               (context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || [],
              boundary =
                boundary_opt ||
-                 ghost_visibility_to_boundary(e(article, "visibility", nil)) ||
+                 ghost_visibility_to_boundary(e(article, "visibility", nil), context) ||
                  (context &&
                     Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
                  "public",
@@ -49,13 +51,16 @@ defmodule Bonfire.Ghost.EmbedHelper do
                Bonfire.Posts.publish(
                  current_user: current_user,
                  boundary: boundary,
+                 to_circles: to_circles,
                  context_id: Enums.id(context),
                  mentions: [Enums.id(context)],
                  post_attrs: %{
                    post_content: %{
                      name: article["title"],
+                     summary: article["custom_excerpt"],
                      html_body: article["html"] || ""
-                   }
+                   },
+                   uploaded_media: primary_image_attachment(article)
                  }
                ) do
           if url do
@@ -128,13 +133,39 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
   defp resolve_context(_, _article), do: {:no_context, nil}
 
-  # Ghost visibility → Bonfire boundary preset name.
-  # "public" → federated public; "members"/"paid"/"tiers" → local instance only.
-  defp ghost_visibility_to_boundary("public"), do: "public"
-  #  only signed in users
-  defp ghost_visibility_to_boundary("members"), do: "discoverable"
-  # TODO: target a specific circle?
-  defp ghost_visibility_to_boundary("paid"), do: "local"
-  # defp ghost_visibility_to_boundary("tiers"), do: "local"
-  defp ghost_visibility_to_boundary(_), do: nil
+  defp primary_image_attachment(article) do
+    case article["feature_image"] do
+      url when is_binary(url) and url != "" ->
+        [
+          %{
+            "href" => url,
+            "label" => article["feature_image_caption"],
+            "alt" => article["feature_image_alt"],
+            "primary_image" => true
+          }
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  # In a group context: "public" falls through to the group DCV; restricted visibilitym maps to group-aware presets 
+  # TODO: only share with a particular circle?
+  defp ghost_visibility_to_boundary("paid", context) when not is_nil(context),
+    do: "nonfederated:preview"
+
+  # defp ghost_visibility_to_boundary("tiers", context) when not is_nil(context), do: "members:private"
+  defp ghost_visibility_to_boundary("members", context) when not is_nil(context),
+    do: "nonfederated:preview"
+
+  defp ghost_visibility_to_boundary("public", context) when not is_nil(context),
+    do: "nonfederated"
+
+  # Without a group: map to standard non-group presets.
+  defp ghost_visibility_to_boundary("members", _), do: "discoverable"
+  defp ghost_visibility_to_boundary("paid", _), do: "local"
+  # defp ghost_visibility_to_boundary("tiers", _), do: "local"
+  defp ghost_visibility_to_boundary("public", _), do: "public"
+  defp ghost_visibility_to_boundary(_, _), do: nil
 end
