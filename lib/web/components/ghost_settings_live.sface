@@ -194,9 +194,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
 
           {#if Config.get([:bonfire_ui_me, :login, :passwordless_only], false) == true}
             <p class="text-sm text-base-content/70 mb-2">
-              {l(
-                "Check the tiers required to log in to Bonfire. Leave all unchecked to allow any Ghost member."
-              )}
+              {l("Check the tiers required to log in to Bonfire. Leave all unchecked to allow any Ghost member.")}
             </p>
           {/if}
 
