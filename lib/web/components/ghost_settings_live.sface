@@ -192,6 +192,14 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             )}
           </p>
 
+          {#if Config.get([:bonfire_ui_me, :login, :passwordless_only], false) == true}
+            <p class="text-sm text-base-content/70 mb-2">
+              {l(
+                "Check the tiers required to log in to Bonfire. Leave all unchecked to allow any Ghost member."
+              )}
+            </p>
+          {/if}
+
           <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {#for tier <- @tiers}
               <div class={
@@ -200,6 +208,15 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
                 "border-base-content/5 opacity-60": !tier["active"]
               }>
                 <div class="card-body p-4 gap-1">
+                  {#if Config.get([:bonfire_ui_me, :login, :passwordless_only], false) == true}
+                    <form phx-change="Bonfire.Common.Settings:set" class="flex justify-end">
+                      <Bonfire.UI.Common.SettingsToggleLive
+                        keys={[:bonfire_ghost, :required_tier, tier["slug"]]}
+                        scope={:instance}
+                        name={l("Required for access")}
+                      />
+                    </form>
+                  {/if}
                   <div class="flex items-center justify-between gap-2">
                     <h4 class="font-semibold text-lg">{tier["name"]}</h4>
                     <div class="flex gap-1 shrink-0">
