@@ -5,6 +5,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
   alias Bonfire.Common.Enums
   import Untangle
   alias Bonfire.Ghost
+  alias Bonfire.Ghost.API
+  alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Federate.ActivityPub.Peered
 
   @doc """
@@ -29,7 +31,6 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
       other ->
         info(other, "did not find an existing post, fetch from source")
-        current_user = Keyword.fetch!(opts, :current_user)
         group_id = Keyword.get(opts, :group_id)
         require_topic? = Keyword.get(opts, :require_topic, false)
 
@@ -37,6 +38,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
         with true <- Ghost.configured?() || {:error, :ghost_not_configured},
              {:ok, article} <- fetch_article(slug_or_id),
+             author = resolve_author(article) || Keyword.fetch!(opts, :current_user),
              {context_type, context} <- resolve_context(group_id, article),
              :ok <- check_topic_requirement(require_topic?, context_type),
              to_circles =
@@ -49,7 +51,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
                  "public",
              {:ok, post} <-
                Bonfire.Posts.publish(
-                 current_user: current_user,
+                 current_user: author,
                  boundary: boundary,
                  to_circles: to_circles,
                  context_id: Enums.id(context),
@@ -85,18 +87,22 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp fetch_article(slug), do: fetch_by_slug(slug)
 
   defp fetch_by_slug(slug) do
-    case Ghost.get_post(slug) do
-      {:ok, %{"posts" => [post | _]}} -> {:ok, post}
-      {:ok, %{"posts" => []}} -> {:error, :not_found}
-      error -> error
+    with {:ok, c} <- Ghost.client() do
+      case API.get_post_by_slug(c, slug) do
+        {:ok, %{"posts" => [post | _]}} -> {:ok, post}
+        {:ok, %{"posts" => []}} -> {:error, :not_found}
+        error -> error
+      end
     end
   end
 
   defp fetch_by_id(id) do
-    case Ghost.get_post_by_id(id) do
-      {:ok, %{"posts" => [post | _]}} -> {:ok, post}
-      {:ok, %{"posts" => []}} -> {:error, :not_found}
-      error -> error
+    with {:ok, c} <- Ghost.client() do
+      case API.get_post_by_id(c, id) do
+        {:ok, %{"posts" => [post | _]}} -> {:ok, post}
+        {:ok, %{"posts" => []}} -> {:error, :not_found}
+        error -> error
+      end
     end
   end
 
@@ -150,7 +156,39 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
-  # In a group context: "public" falls through to the group DCV; restricted visibilitym maps to group-aware presets 
+  defp resolve_author(article) do
+    primary_author =
+      e(article, "primary_author", nil)
+      |> flood("attempt to resolve author from article data")
+
+    ghost_id = e(primary_author, "id", nil)
+    slug = e(primary_author, "slug", nil)
+
+    (ghost_id && fetch_and_provision_staff(ghost_id)) ||
+      (slug && Config.get([:bonfire_ghost, :match_author_by_username], false) &&
+         find_by_username(slug))
+  end
+
+  defp fetch_and_provision_staff(ghost_id) do
+    with {:ok, c} <- Ghost.admin_client(),
+         {:ok, ghost_staff} <- AdminAPI.get_user(c, ghost_id),
+         {:ok, user} <- Bonfire.Ghost.Sync.Members.provision_from_ghost_member(ghost_staff) do
+      user
+    else
+      other ->
+        warn(other, "Failed to fetch/provision Ghost staff user")
+        nil
+    end
+  end
+
+  defp find_by_username(slug) do
+    case Bonfire.Me.Characters.by_username(slug) do
+      {:ok, user} -> user
+      _ -> nil
+    end
+  end
+
+  # In a group context: "public" falls through to the group DCV; restricted visibilitym maps to group-aware presets
   # TODO: only share with a particular circle?
   defp ghost_visibility_to_boundary("paid", context) when not is_nil(context),
     do: "nonfederated:preview"

@@ -235,6 +235,33 @@ defmodule Bonfire.Ghost.AdminAPI do
     end
   end
 
+  @doc """
+  Gets a Ghost staff user by their Ghost user ID.
+
+  Returns the user map including `email` and `name`.
+  """
+  def get_user(client, ghost_user_id) when is_binary(ghost_user_id) do
+    case Req.get(client, url: "/users/#{ghost_user_id}/") do
+      {:ok, %Req.Response{status: 200, body: %{"users" => [user | _]}}} ->
+        {:ok, user}
+
+      {:ok, %Req.Response{status: 404}} ->
+        {:error, :not_found}
+
+      {:ok, %Req.Response{status: 401, body: body}} ->
+        error(body, "Ghost Admin API authentication failed")
+        {:error, :unauthorized}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        error(body, "Ghost Admin API error (status #{status})")
+        {:error, {:api_error, status, body}}
+
+      {:error, reason} ->
+        error(reason, "Ghost Admin API request failed")
+        {:error, reason}
+    end
+  end
+
   defp maybe_add_param(params, key, opts) do
     case Keyword.get(opts, key) do
       nil -> params

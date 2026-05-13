@@ -11,14 +11,17 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   @behaviour Bonfire.UI.Me.LoginEmailProvider
 
   alias Bonfire.Ghost
+  alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Sync.Members
 
   @impl true
   def ensure_account(email) when is_binary(email) and email != "" do
-    case Ghost.get_member_by_email(email) do
-      {:ok, %{"members" => [member | _]}} -> Members.provision_from_ghost_member(member)
-      {:ok, _} -> :no_match
-      {:error, reason} -> {:error, reason}
+    with {:ok, c} <- Ghost.admin_client() do
+      case AdminAPI.get_member_by_email(c, email) do
+        {:ok, %{"members" => [member | _]}} -> Members.provision_from_ghost_member(member)
+        {:ok, _} -> :no_match
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 

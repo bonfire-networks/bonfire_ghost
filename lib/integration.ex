@@ -2,8 +2,16 @@ defmodule Bonfire.Ghost do
   @moduledoc """
   Ghost blog integration for Bonfire.
 
-  This extension provides integration with Ghost CMS via both the Content API
-  (for public posts) and Admin API (for members, drafts, etc.).
+  Provides configuration helpers and API clients for Ghost CMS via both the
+  Content API (for public posts) and Admin API (for members, drafts, etc.).
+
+  For API calls use the underlying modules directly:
+
+      {:ok, c} = Bonfire.Ghost.client()
+      Bonfire.Ghost.API.list_posts(c, limit: 5)
+
+      {:ok, c} = Bonfire.Ghost.admin_client()
+      Bonfire.Ghost.AdminAPI.list_members(c, limit: 50)
 
   ## Configuration
 
@@ -13,28 +21,10 @@ defmodule Bonfire.Ghost do
         ghost_url: "https://your-blog.ghost.io",
         content_api_key: "your_content_api_key_here",
         admin_api_key: "id:secret_hex"  # Optional, for member access
-
-  ## Usage
-
-      # Check if configured
-      Bonfire.Ghost.configured?()
-
-      # List recent posts (Content API)
-      Bonfire.Ghost.list_posts(limit: 5)
-
-      # Get a specific post
-      Bonfire.Ghost.get_post("my-post-slug")
-
-      # List members (Admin API - requires admin_api_key)
-      Bonfire.Ghost.list_members(limit: 50)
-
-      # Get member by email
-      Bonfire.Ghost.get_member_by_email("user@example.com")
   """
 
   use Bonfire.Common.Config
   use Bonfire.Common.Localise
-  import Untangle
   import Bonfire.Common.Modularity.DeclareHelpers
 
   alias Bonfire.Ghost.API
@@ -66,7 +56,7 @@ defmodule Bonfire.Ghost do
   end
 
   @doc """
-  Creates an API client with the configured credentials.
+  Creates a Content API client with the configured credentials.
 
   Returns `{:ok, client}` if configured, `{:error, :not_configured}` otherwise.
   """
@@ -77,60 +67,6 @@ defmodule Bonfire.Ghost do
       {:error, :not_configured}
     end
   end
-
-  @doc """
-  Lists posts from the configured Ghost blog.
-
-  ## Options
-
-    * `:limit` - Number of posts to return (default: 10)
-    * `:page` - Page number for pagination
-    * `:filter` - Ghost filter string
-
-  ## Examples
-
-      Bonfire.Ghost.list_posts(limit: 5)
-      #=> {:ok, %{"posts" => [...], "meta" => %{...}}}
-
-      Bonfire.Ghost.list_posts()
-      #=> {:error, :not_configured}
-  """
-  def list_posts(opts \\ []) do
-    with {:ok, c} <- client() do
-      API.list_posts(c, opts)
-    end
-  end
-
-  @doc """
-  Gets a single post by its slug.
-
-  ## Examples
-
-      Bonfire.Ghost.get_post("welcome-to-ghost")
-      #=> {:ok, %{"posts" => [%{...}]}}
-  """
-  def get_post(slug) when is_binary(slug) do
-    with {:ok, c} <- client() do
-      API.get_post_by_slug(c, slug)
-    end
-  end
-
-  def get_post_by_id(id) when is_binary(id) do
-    with {:ok, c} <- client() do
-      API.get_post_by_id(c, id)
-    end
-  end
-
-  @doc """
-  Gets the Ghost site settings.
-  """
-  def get_settings do
-    with {:ok, c} <- client() do
-      API.get_settings(c)
-    end
-  end
-
-  # --- Admin API functions ---
 
   @doc "Returns the configured Ghost Admin API key, or nil if not configured."
   def admin_api_key do
@@ -154,89 +90,6 @@ defmodule Bonfire.Ghost do
       AdminAPI.client(ghost_url(), admin_api_key())
     else
       {:error, :not_configured}
-    end
-  end
-
-  @doc """
-  Lists members from the Ghost blog.
-
-  Requires Admin API configuration.
-
-  ## Options
-
-    * `:limit` - Number of members to return (default: 15)
-    * `:page` - Page number for pagination
-    * `:filter` - Ghost filter string (e.g., "status:paid", "subscribed:true")
-    * `:order` - Sort order (e.g., "created_at desc")
-    * `:include` - Related data (e.g., "labels,newsletters,subscriptions")
-
-  ## Examples
-
-      Bonfire.Ghost.list_members(limit: 50)
-      #=> {:ok, %{"members" => [...], "meta" => %{...}}}
-
-      Bonfire.Ghost.list_members(filter: "status:paid", include: "subscriptions")
-      #=> {:ok, %{"members" => [...], "meta" => %{...}}}
-  """
-  def list_members(opts \\ []) do
-    with {:ok, c} <- admin_client() do
-      AdminAPI.list_members(c, opts)
-    end
-  end
-
-  @doc """
-  Gets a single member by ID.
-
-  ## Examples
-
-      Bonfire.Ghost.get_member("member-id-here")
-      #=> {:ok, %{"members" => [%{...}]}}
-  """
-  def get_member(member_id, opts \\ []) when is_binary(member_id) do
-    with {:ok, c} <- admin_client() do
-      AdminAPI.get_member(c, member_id, opts)
-    end
-  end
-
-  @doc """
-  Gets a member by their email address.
-
-  ## Examples
-
-      Bonfire.Ghost.get_member_by_email("user@example.com")
-      #=> {:ok, %{"members" => [%{...}]}}
-  """
-  def get_member_by_email(email, opts \\ []) when is_binary(email) do
-    with {:ok, c} <- admin_client() do
-      AdminAPI.get_member_by_email(c, email, opts)
-    end
-  end
-
-  @doc """
-  Lists all tiers (membership levels) available on the Ghost site.
-
-  ## Examples
-
-      Bonfire.Ghost.list_tiers()
-      #=> {:ok, %{"tiers" => [...]}}
-  """
-  def list_tiers(opts \\ []) do
-    with {:ok, c} <- admin_client() do
-      AdminAPI.list_tiers(c, opts)
-    end
-  end
-
-  @doc """
-  Lists newsletters configured on the Ghost site.
-
-  ## Examples
-
-      Bonfire.Ghost.list_newsletters()
-      #=> {:ok, %{"newsletters" => [...]}}
-  """
-  def list_newsletters(opts \\ []) do
-    with {:ok, c} <- admin_client() do
-      AdminAPI.list_newsletters(c, opts)
     end
   end
 end

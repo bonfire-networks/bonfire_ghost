@@ -17,7 +17,7 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   orphaned `ghost_tier:*` circles (tier removed upstream) by appending
   "(archived)" to their summary — nothing is ever deleted.
 
-  See `Bonfire.Ghost.list_tiers/1` for the upstream Ghost API.
+  See `Bonfire.Ghost.AdminAPI.list_tiers/2` for the upstream Ghost API.
   """
 
   import Untangle
@@ -27,6 +27,7 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   alias Bonfire.Common.Repo
   alias Bonfire.Data.Identity.ExtraInfo
   alias Bonfire.Ghost
+  alias Bonfire.Ghost.AdminAPI
   alias Ecto.Changeset
 
   @circle_prefix "ghost_tier:"
@@ -60,8 +61,9 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   """
   @spec sync_all(keyword()) :: {:ok, sync_summary(), [map()]} | {:error, term()}
   def sync_all(opts \\ []) do
-    with {:ok, %{"tiers" => tiers}} when is_list(tiers) <-
-           Ghost.list_tiers(include: "benefits,monthly_price,yearly_price") do
+    with {:ok, c} <- Ghost.admin_client(),
+         {:ok, %{"tiers" => tiers}} when is_list(tiers) <-
+           AdminAPI.list_tiers(c, include: "benefits,monthly_price,yearly_price") do
       {:ok, sync_tiers(tiers, opts), tiers}
     end
   end

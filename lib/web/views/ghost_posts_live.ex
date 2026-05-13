@@ -6,6 +6,9 @@ defmodule Bonfire.Ghost.Web.GhostPostsLive do
 
   on_mount {LivePlugs, [Bonfire.UI.Me.LivePlugs.LoadCurrentUser]}
 
+  alias Bonfire.Ghost
+  alias Bonfire.Ghost.API
+
   def format_date(nil), do: ""
 
   def format_date(iso_string) when is_binary(iso_string) do
@@ -42,16 +45,18 @@ defmodule Bonfire.Ghost.Web.GhostPostsLive do
 
   def handle_info(:load_posts, socket) do
     socket =
-      case Bonfire.Ghost.list_posts(limit: 10) do
-        {:ok, %{"posts" => posts}} ->
-          assign(socket, loading: false, posts: posts, error: nil)
+      case Ghost.client() do
+        {:ok, c} ->
+          case API.list_posts(c, limit: 10) do
+            {:ok, %{"posts" => posts}} ->
+              assign(socket, loading: false, posts: posts, error: nil)
 
-        {:ok, body} when is_map(body) ->
-          posts = Map.get(body, "posts", [])
-          assign(socket, loading: false, posts: posts, error: nil)
+            {:ok, body} when is_map(body) ->
+              assign(socket, loading: false, posts: Map.get(body, "posts", []), error: nil)
 
-        {:error, :not_configured} ->
-          assign(socket, loading: false, error: :not_configured)
+            {:error, reason} ->
+              assign(socket, loading: false, error: reason)
+          end
 
         {:error, reason} ->
           assign(socket, loading: false, error: reason)

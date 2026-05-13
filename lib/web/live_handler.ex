@@ -10,6 +10,8 @@ defmodule Bonfire.Ghost.LiveHandler do
   use Bonfire.UI.Common.Web, :live_handler
 
   alias Bonfire.Ghost
+  alias Bonfire.Ghost.API
+  alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Sync
 
   # Ghost API include lists — keep in sync with what the settings page renders.
@@ -27,14 +29,14 @@ defmodule Bonfire.Ghost.LiveHandler do
     current_page = get_in(socket.assigns, [:page_info, :page]) || 1
     next_page = current_page + 1
 
-    case Ghost.list_members(limit: 50, page: next_page, include: @members_include) do
-      {:ok, %{"members" => new_members, "meta" => meta}} ->
-        page_info = extract_page_info(meta)
-        members = socket.assigns.members ++ new_members
-        {:noreply, assign(socket, members: members, page_info: page_info)}
-
-      {:error, _reason} ->
-        {:noreply, socket}
+    with {:ok, c} <- Ghost.admin_client(),
+         {:ok, %{"members" => new_members, "meta" => meta}} <-
+           AdminAPI.list_members(c, limit: 50, page: next_page, include: @members_include) do
+      page_info = extract_page_info(meta)
+      members = socket.assigns.members ++ new_members
+      {:noreply, assign(socket, members: members, page_info: page_info)}
+    else
+      _ -> {:noreply, socket}
     end
   end
 
@@ -79,13 +81,23 @@ defmodule Bonfire.Ghost.LiveHandler do
   them concurrently and apply the results sequentially.
   """
   def load_ghost_data(socket) do
-    admin? = Ghost.admin_configured?()
+    content_client = Ghost.client()
+    admin_client = Ghost.admin_client()
 
     fetchers = [
-      {:settings, fn -> Ghost.get_settings() end},
-      {:tiers, fn -> if admin?, do: Ghost.list_tiers(include: @tiers_include) end},
+      {:settings,
+       fn ->
+         with {:ok, c} <- content_client, do: API.get_settings(c)
+       end},
+      {:tiers,
+       fn ->
+         with {:ok, c} <- admin_client, do: AdminAPI.list_tiers(c, include: @tiers_include)
+       end},
       {:members,
-       fn -> if admin?, do: Ghost.list_members(limit: 50, include: @members_include) end}
+       fn ->
+         with {:ok, c} <- admin_client,
+              do: AdminAPI.list_members(c, limit: 50, include: @members_include)
+       end}
     ]
 
     results =

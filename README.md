@@ -5,8 +5,9 @@ Ghost blog integration for Bonfire. This extension connects your Bonfire instanc
 ## Features
 
 - Display Ghost blog posts in your Bonfire instance
-- Access members/subscribers data via Admin API
-- List tiers (membership levels) and newsletters
+- Embed a Bonfire comment thread on Ghost articles (`data-canonical-slug` / `data-canonical-id`)
+- Auto-provision Ghost authors and members as Bonfire users on first login
+- Sync Ghost membership tiers to Bonfire circles
 - Configurable via environment variables
 
 ## Configuration
@@ -35,7 +36,26 @@ GHOST_ADMIN_API_KEY=id:secret_hex
 
 Once configured, visit `/ghost` in your Bonfire instance to see your Ghost blog posts.
 
+### Embed comments on Ghost articles
+
+Add this script tag to your Ghost theme's `post.hbs`:
+
+```html
+<script
+  src="https://your-bonfire.example/js/comments_embed.js?v1.4"
+  data-canonical-slug="{{slug}}"
+  data-group-id="optional-bonfire-group-id"
+  data-require-topic="true"
+></script>
+```
+
+- `data-canonical-slug` — Ghost post slug (deduplicates via URL; `data-canonical-id` for Ghost ID)
+- `data-group-id` — post the thread inside a Bonfire group/topic
+- `data-require-topic` — only create a thread if the article's primary tag matches a Bonfire topic
+
 ### Programmatic Access
+
+Use `Bonfire.Ghost.client/0` or `Bonfire.Ghost.admin_client/0` to get a client, then call the underlying API modules directly:
 
 ```elixir
 # Check if configured
@@ -43,48 +63,22 @@ Bonfire.Ghost.configured?()       # Content API
 Bonfire.Ghost.admin_configured?() # Admin API
 
 # --- Content API (public posts) ---
+{:ok, c} = Bonfire.Ghost.client()
 
-# List recent posts
-Bonfire.Ghost.list_posts(limit: 5)
-
-# Get a specific post by slug
-Bonfire.Ghost.get_post("my-post-slug")
-
-# Get site settings
-Bonfire.Ghost.get_settings()
+Bonfire.Ghost.API.list_posts(c, limit: 5)
+Bonfire.Ghost.API.get_post_by_slug(c, "my-post-slug")
+Bonfire.Ghost.API.get_settings(c)
 
 # --- Admin API (members, requires admin_api_key) ---
+{:ok, c} = Bonfire.Ghost.admin_client()
 
-# List all members with full data
-Bonfire.Ghost.list_members(limit: 100, include: "labels,newsletters,subscriptions")
-
-# Filter members
-Bonfire.Ghost.list_members(filter: "status:paid")
-Bonfire.Ghost.list_members(filter: "subscribed:true")
-
-# Get member by ID
-Bonfire.Ghost.get_member("member-id-here")
-
-# Get member by email
-Bonfire.Ghost.get_member_by_email("user@example.com")
-
-# List membership tiers
-Bonfire.Ghost.list_tiers()
-
-# List newsletters
-Bonfire.Ghost.list_newsletters()
+Bonfire.Ghost.AdminAPI.list_members(c, limit: 100, include: "labels,newsletters,subscriptions")
+Bonfire.Ghost.AdminAPI.list_members(c, filter: "status:paid")
+Bonfire.Ghost.AdminAPI.get_member(c, "member-id-here")
+Bonfire.Ghost.AdminAPI.get_member_by_email(c, "user@example.com")
+Bonfire.Ghost.AdminAPI.list_tiers(c)
+Bonfire.Ghost.AdminAPI.list_newsletters(c)
 ```
-
-### Member Data Fields
-
-When fetching members, each member includes:
-- `id`, `uuid`, `email`, `name`
-- `status` (free, paid, comped)
-- `subscribed` (newsletter subscription status)
-- `created_at`, `updated_at`
-- `labels` (if included)
-- `newsletters` (if included)
-- `subscriptions` (if included) - paid subscription details
 
 
 ## Copyright and License
