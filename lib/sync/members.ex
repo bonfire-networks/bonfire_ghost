@@ -30,8 +30,7 @@ defmodule Bonfire.Ghost.Sync.Members do
 
   @circle_prefix "ghost_tier:"
 
-  # Max handle attempts: base then base_2..base_9.
-  @handle_suffix_attempts 9
+  @handle_suffix_attempts 5
 
   @type diff :: %{added: non_neg_integer(), removed: non_neg_integer()}
 
@@ -43,8 +42,8 @@ defmodule Bonfire.Ghost.Sync.Members do
           {:ok, Bonfire.Data.Identity.User.t()} | {:error, term()}
   def provision_from_ghost_member(%{"email" => email} = ghost_member)
       when is_binary(email) and email != "" do
-    with {:ok, account} <- ensure_account(email),
-         {:ok, user} <- ensure_user(account, ghost_member),
+    with {:ok, new?, account} <- ensure_account(email),
+         {:ok, user} <- ensure_user(account, ghost_member, new?),
          {:ok, _diff} <- reconcile_circles(user, ghost_member) do
       {:ok, user}
     end
@@ -120,57 +119,77 @@ defmodule Bonfire.Ghost.Sync.Members do
           credential: %{password: password, password_confirmation: password}
         }
 
-        Accounts.signup(params, must_confirm?: false, skip_invite_check: true)
+        with {:ok, account} <-
+               Accounts.signup(params, must_confirm?: false, skip_invite_check: true) do
+          {:ok, true, account}
+        end
 
       account ->
-        {:ok, account}
+        {:ok, false, account}
     end
   end
 
   # --- User ----------------------------------------------------------------
 
-  defp ensure_user(account, ghost_member) do
-    case Users.by_account!(account) do
-      [user | _] ->
-        {:ok, user}
+  defp ensure_user(account, ghost_member, new? \\ false) do
+    existing =
+      if !new? do
+        case Users.by_account!(account) do
+          [user | _] -> user
+          [] -> nil
+        end
+      end
 
-      [] ->
-        base = derive_handle(ghost_member)
-        name = ghost_member["name"] || base
-        try_create_user(account, base, name, 1)
+    case existing do
+      nil ->
+        name = ghost_member["name"]
+        bases = candidate_handles(ghost_member)
+        try_create_user(account, bases, name, 1)
+
+      user ->
+        {:ok, user}
     end
   end
 
-  defp try_create_user(account, base, name, attempt)
-       when attempt <= @handle_suffix_attempts do
-    username = handle_with_suffix(base, attempt)
-    params = %{profile: %{name: name}, character: %{username: username}}
-
-    case Users.create(params, account) do
-      {:ok, user} ->
-        {:ok, user}
-
-      {:error, %Ecto.Changeset{} = cs} ->
-        debug(cs, "Users.create failed — retrying with next handle suffix")
-        try_create_user(account, base, name, attempt + 1)
-    end
-  end
-
-  defp try_create_user(_account, base, _name, _attempt) do
-    error(base, "Could not find a free handle derived from Ghost email")
+  defp try_create_user(_account, _bases, _name, attempt)
+       when attempt > @handle_suffix_attempts do
+    error("Could not find a free handle from any candidate")
     {:error, :handle_exhausted}
   end
 
-  # Username regex is `[a-z0-9_]` — underscores, not dashes, for the suffix.
-  defp handle_with_suffix(base, 1), do: base
-  defp handle_with_suffix(base, n), do: "#{base}_#{n}"
+  defp try_create_user(account, bases, name, attempt) do
+    suffix = if attempt == 1, do: nil, else: Enum.random(2..99)
 
-  defp derive_handle(%{"email" => email}) do
-    email
-    |> String.split("@", parts: 2)
-    |> List.first()
-    |> Characters.clean_username()
+    result =
+      Enum.find_value(bases, fn base ->
+        username = base |> handle_with_suffix(suffix) |> Characters.clean_username("")
+
+        case Users.create(%{profile: %{name: name}, character: %{username: username}}, account) do
+          {:ok, user} ->
+            {:ok, user}
+
+          {:error, %Ecto.Changeset{} = cs} ->
+            debug(cs, "Users.create failed for #{username}")
+            nil
+        end
+      end)
+
+    case result do
+      {:ok, user} -> {:ok, user}
+      nil -> try_create_user(account, bases, name, attempt + 1)
+    end
   end
+
+  # Candidate base usernames in priority order: slug, display name.
+  # Suffixes (_2, _3 ...) are added by try_create_user only after all bases fail.
+  defp candidate_handles(ghost_member) do
+    [ghost_member["slug"], ghost_member["name"]]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+  end
+
+  defp handle_with_suffix(base, nil), do: base
+  defp handle_with_suffix(base, n), do: "#{base}_#{n}"
 
   # --- Circles -------------------------------------------------------------
 

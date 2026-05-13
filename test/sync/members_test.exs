@@ -15,11 +15,16 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
   @tier_paid %{"id" => "t_paid", "slug" => "paid", "name" => "Paid"}
 
   defp member(email, opts \\ []) do
-    %{
+    base = %{
       "email" => email,
       "name" => Keyword.get(opts, :name, "Ghost Member"),
       "tiers" => Keyword.get(opts, :tiers, [])
     }
+
+    case Keyword.get(opts, :slug) do
+      nil -> base
+      slug -> Map.put(base, "slug", slug)
+    end
   end
 
   defp tier_circle(slug) do
@@ -89,19 +94,54 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
     end
   end
 
-  describe "provision_from_ghost_member/1 — handle collisions" do
-    test "appends a numeric suffix when the derived handle is taken" do
+  describe "provision_from_ghost_member/1 — handle priority" do
+    test "uses slug as first-choice username when present" do
       setup_tiers([])
 
-      # Use the exact local part of the Ghost email as an existing username;
-      # `Characters.clean_username` is identity on plain alphanumerics.
-      taken = "taken"
-      _existing = Fake.fake_user!(%{}, %{username: taken})
+      {:ok, user} =
+        Members.provision_from_ghost_member(
+          member("slug@test.local", slug: "myslug", name: "My Name")
+        )
 
-      {:ok, user} = Members.provision_from_ghost_member(member("#{taken}@test.local"))
+      assert user.character.username == "myslug"
+    end
 
-      refute user.character.username == taken
-      assert String.starts_with?(user.character.username, taken)
+    test "falls back to name-derived handle when no slug" do
+      setup_tiers([])
+
+      {:ok, user} =
+        Members.provision_from_ghost_member(member("noname@test.local", name: "Jane Doe"))
+
+      assert user.character.username == "JaneDoe"
+    end
+
+    test "falls back to name when slug is taken" do
+      setup_tiers([])
+      _existing = Fake.fake_user!(%{}, %{username: "takenslug"})
+
+      {:ok, user} =
+        Members.provision_from_ghost_member(
+          member("fallback@test.local", slug: "takenslug", name: "Jane Doe")
+        )
+
+      assert user.character.username == "JaneDoe"
+    end
+
+    test "appends a random numeric suffix when all base handles are taken" do
+      setup_tiers([])
+      _existing_slug = Fake.fake_user!(%{}, %{username: "takenslug"})
+      _existing_name = Fake.fake_user!(%{}, %{username: "takenname"})
+
+      {:ok, user} =
+        Members.provision_from_ghost_member(
+          member("collision@test.local", slug: "takenslug", name: "Takenname")
+        )
+
+      username = user.character.username
+      refute username in ["takenslug", "takenname"]
+
+      assert String.starts_with?(username, "takenslug") or
+               String.starts_with?(username, "takenname")
     end
   end
 
