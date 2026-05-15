@@ -159,7 +159,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp resolve_author(article) do
     primary_author =
       e(article, "primary_author", nil)
-      |> flood("attempt to resolve author from article data")
+      |> debug("attempt to resolve author from article data")
 
     ghost_id = e(primary_author, "id", nil)
     slug = e(primary_author, "slug", nil)
