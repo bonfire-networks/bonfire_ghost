@@ -39,17 +39,16 @@ defmodule Bonfire.Ghost.RuntimeConfig do
     webhook_secret = System.get_env("GHOST_WEBHOOK_SECRET")
     gated_mode = System.get_env("GHOST_GATED_MODE")
 
-    config :bonfire_ghost, []
-      |> maybe_add(:ghost_url, ghost_url)
-      |> maybe_add(:content_api_key, content_api_key)
-      |> maybe_add(:admin_api_key, admin_api_key)
-      |> maybe_add(:webhook_secret, webhook_secret)
-
+    config :bonfire_ghost,
+           []
+           |> maybe_add(:ghost_url, ghost_url)
+           |> maybe_add(:content_api_key, content_api_key)
+           |> maybe_add(:admin_api_key, admin_api_key)
+           |> maybe_add(:webhook_secret, webhook_secret)
 
     # Drive the login page toggle through bonfire_ui_me's own setting so
     # the UI extension never needs to know about Ghost.
     config :bonfire_ui_me, :login, passwordless_only: truthy?(gated_mode)
-    
   end
 
   defp maybe_add(opts, _key, nil), do: opts
