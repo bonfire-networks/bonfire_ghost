@@ -34,9 +34,9 @@ defmodule Bonfire.Ghost.RuntimeConfig do
     import Config
 
     ghost_url = System.get_env("GHOST_URL")
-    content_api_key = System.get_env("GHOST_CONTENT_API_KEY")
-    admin_api_key = System.get_env("GHOST_ADMIN_API_KEY")
-    webhook_secret = System.get_env("GHOST_WEBHOOK_SECRET")
+    content_api_key = Bonfire.Common.EnvSecrets.env_or_file("GHOST_CONTENT_API_KEY")
+    admin_api_key = Bonfire.Common.EnvSecrets.env_or_file("GHOST_ADMIN_API_KEY")
+    webhook_secret = Bonfire.Common.EnvSecrets.env_or_file("GHOST_WEBHOOK_SECRET")
     gated_mode = System.get_env("GHOST_GATED_MODE")
 
     config :bonfire_ghost,
