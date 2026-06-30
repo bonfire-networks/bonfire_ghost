@@ -7,20 +7,29 @@ defmodule Bonfire.Ghost.Web.WebhookController do
   does as little as possible: pick out the relevant Ghost member object,
   enqueue an Oban job on `:ghost_webhooks`, return 200.
 
-  Events are disambiguated by URL path. Ghost binds each webhook integration
-  to one event, so the admin configures three separate webhook URLs in
-  Ghost admin:
+  Events are disambiguated by URL path. Ghost binds each webhook integration to
+  one event; the URL path is admin-chosen, so we use Ghost's *exact* event names
+  (see https://docs.ghost.org/webhooks) as the path segment:
 
-      POST /ghost/webhook/member-added
-      POST /ghost/webhook/member-edited
-      POST /ghost/webhook/member-deleted
+      POST /ghost/webhook/member.added
+      POST /ghost/webhook/member.edited
+      POST /ghost/webhook/member.deleted
+      POST /ghost/webhook/post.published
+      POST /ghost/webhook/post.published.edited
+      POST /ghost/webhook/post.unpublished
+      POST /ghost/webhook/post.deleted
 
-  Ghost's `member.*` payload shape is:
+  The earlier hyphenated member aliases (`member-added`, etc.) are still
+  accepted for backwards compatibility with already-configured webhooks.
+
+  Ghost's `member.*` / `post.*` payload shape is:
 
       {"member": {"current": {...}, "previous": {...}}}
+      {"post":   {"current": {...}, "previous": {...}}}
 
-  We pass `current` to the worker for `added`/`edited` and `previous` for
-  `deleted`; both are included in the job args for future auditing.
+  We pass `current` to the worker for added/edited/published and `previous` for
+  deleted (the object no longer exists by then). Post auto-import is opt-in —
+  see `Bonfire.Ghost.Workers.ArticleWebhookWorker`.
   """
 
   use Bonfire.UI.Common.Web, :controller
@@ -28,55 +37,95 @@ defmodule Bonfire.Ghost.Web.WebhookController do
   import Untangle
 
   alias Bonfire.Ghost.Workers.MemberWebhookWorker
+  alias Bonfire.Ghost.Workers.ArticleWebhookWorker
 
   plug(Bonfire.Ghost.Web.Plugs.VerifyGhostSignature)
 
-  def member(conn, %{"event" => "member-added"} = params),
-    do: enqueue(conn, "member.added", params)
+  # member events — Ghost's exact event names, plus hyphenated aliases for back-compat
+  def webhook(conn, %{"event" => e} = params) when e in ["member.added", "member-added"],
+    do: enqueue_member(conn, "member.added", params, "current")
 
-  def member(conn, %{"event" => "member-edited"} = params),
-    do: enqueue(conn, "member.edited", params)
+  def webhook(conn, %{"event" => e} = params) when e in ["member.edited", "member-edited"],
+    do: enqueue_member(conn, "member.edited", params, "current")
 
-  def member(conn, %{"event" => "member-deleted"} = params),
-    do: enqueue(conn, "member.deleted", params)
+  def webhook(conn, %{"event" => e} = params) when e in ["member.deleted", "member-deleted"],
+    do: enqueue_member(conn, "member.deleted", params, "previous")
 
-  def member(conn, %{"event" => path_event}) do
+  # post (article) events — Ghost's exact event names
+  def webhook(conn, %{"event" => "post.published"} = params),
+    do: enqueue_post(conn, "post.published", params, "current")
+
+  def webhook(conn, %{"event" => "post.published.edited"} = params),
+    do: enqueue_post(conn, "post.published.edited", params, "current")
+
+  def webhook(conn, %{"event" => "post.unpublished"} = params),
+    do: enqueue_post(conn, "post.unpublished", params, "current")
+
+  def webhook(conn, %{"event" => "post.deleted"} = params),
+    do: enqueue_post(conn, "post.deleted", params, "previous")
+
+  def webhook(conn, %{"event" => path_event}) do
     warn(path_event, "unknown Ghost webhook path")
     send_resp(conn, 404, "unknown event")
   end
 
-  defp enqueue(conn, event, params) do
-    with {:ok, member} <- extract_member(event, params) do
-      %{
-        "event" => event,
-        "member" => member,
-        "previous" => get_in(params, ["member", "previous"])
-      }
-      |> MemberWebhookWorker.new()
-      |> Oban.insert()
-      |> case do
-        {:ok, _job} ->
-          send_resp(conn, 200, "ok")
+  defp enqueue_member(conn, event, params, key) do
+    case fetch_object(params, "member", key) do
+      {:ok, member} ->
+        enqueue(
+          conn,
+          MemberWebhookWorker.new(%{
+            "event" => event,
+            "member" => member,
+            "previous" => get_in(params, ["member", "previous"])
+          })
+        )
 
-        {:error, reason} ->
-          error(reason, "failed to enqueue Ghost webhook job")
-          send_resp(conn, 500, "enqueue failed")
-      end
-    else
-      {:error, :no_member} ->
-        warn(params, "Ghost webhook missing member.current/previous")
-        send_resp(conn, 400, "malformed payload")
+      {:error, :no_object} ->
+        malformed(conn, params, "member.#{key}")
     end
   end
 
-  # `added` / `edited` carry the new state in `member.current`; `deleted` in `member.previous`.
-  defp extract_member("member.deleted", params), do: fetch_member(params, "previous")
-  defp extract_member(_event, params), do: fetch_member(params, "current")
+  defp enqueue_post(conn, event, params, key) do
+    cond do
+      not ArticleWebhookWorker.auto_import_enabled?() ->
+        # Opt-in is off — ack so Ghost doesn't retry, but don't enqueue.
+        debug(event, "Ghost article auto-import disabled — ignoring webhook")
+        send_resp(conn, 200, "ok (auto-import disabled)")
 
-  defp fetch_member(params, key) do
-    case get_in(params, ["member", key]) do
-      m when is_map(m) -> {:ok, m}
-      _ -> {:error, :no_member}
+      true ->
+        case fetch_object(params, "post", key) do
+          {:ok, post} ->
+            enqueue(conn, ArticleWebhookWorker.new(%{"event" => event, "post" => post}))
+
+          {:error, :no_object} ->
+            malformed(conn, params, "post.#{key}")
+        end
     end
+  end
+
+  defp enqueue(conn, changeset) do
+    changeset
+    |> Oban.insert()
+    |> case do
+      {:ok, _job} ->
+        send_resp(conn, 200, "ok")
+
+      {:error, reason} ->
+        error(reason, "failed to enqueue Ghost webhook job")
+        send_resp(conn, 500, "enqueue failed")
+    end
+  end
+
+  defp fetch_object(params, root, key) do
+    case get_in(params, [root, key]) do
+      m when is_map(m) and map_size(m) > 0 -> {:ok, m}
+      _ -> {:error, :no_object}
+    end
+  end
+
+  defp malformed(conn, params, what) do
+    warn(params, "Ghost webhook missing #{what}")
+    send_resp(conn, 400, "malformed payload")
   end
 end

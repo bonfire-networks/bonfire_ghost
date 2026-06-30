@@ -24,10 +24,13 @@ defmodule Bonfire.Ghost.Web.Routes do
       # Ghost webhook receiver — deliberately outside the :browser pipeline
       # (no session, no CSRF, no flash). HMAC signature verification runs
       # as a controller plug; see Bonfire.Ghost.Web.WebhookController.
+      # Handles both member.* and post.* events, disambiguated by `:event` path
+      # (e.g. member-added, post-published, post-edited, post-unpublished,
+      # post-deleted).
       scope "/ghost", Bonfire.Ghost.Web do
         pipe_through(:basic_json)
 
-        post("/webhook/:event", WebhookController, :member)
+        post("/webhook/:event", WebhookController, :webhook)
       end
     end
   end

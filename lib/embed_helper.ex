@@ -3,6 +3,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
   use Bonfire.Common.Config
   use Bonfire.Common.E
   alias Bonfire.Common.Enums
+  alias Bonfire.Common.DatesTimes
+  alias Bonfire.Common.Settings
+  require Bonfire.Common.Settings
+  import Bonfire.Common.Utils, only: [current_user: 1]
   import Untangle
   alias Bonfire.Ghost
   alias Bonfire.Ghost.API
@@ -31,55 +35,147 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
       other ->
         info(other, "did not find an existing post, fetch from source")
-        group_id = Keyword.get(opts, :group_id)
-        require_topic? = Keyword.get(opts, :require_topic, false)
-
-        boundary_opt = Keyword.get(opts, :boundary, nil)
 
         with true <- Ghost.configured?() || {:error, :ghost_not_configured},
-             {:ok, article} <- fetch_article(slug_or_id),
-             author = resolve_author(article) || Keyword.fetch!(opts, :current_user),
-             {context_type, context} <- resolve_context(group_id, article),
-             :ok <- check_topic_requirement(require_topic?, context_type),
-             to_circles =
-               (context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || [],
-             boundary =
-               boundary_opt ||
-                 ghost_visibility_to_boundary(e(article, "visibility", nil), context) ||
-                 (context &&
-                    Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
-                 "public",
-             {:ok, post} <-
-               Bonfire.Posts.publish(
-                 current_user: author,
-                 boundary: boundary,
-                 to_circles: to_circles,
-                 context_id: Enums.id(context),
-                 mentions: [Enums.id(context)],
-                 post_attrs: %{
-                   post_content: %{
-                     name: article["title"],
-                     summary: article["custom_excerpt"],
-                     html_body: article["html"] || ""
-                   },
-                   uploaded_media: primary_image_attachment(article)
-                 }
-               ) do
-          if url do
-            case Peered.save_canonical_uri(post, url) do
-              {:ok, _} ->
-                :ok
-
-              err ->
-                error(
-                  err,
-                  "Could not save canonical URI for Ghost article — duplicates may occur"
-                )
-            end
-          end
-
-          {:ok, post}
+             {:ok, article} <- fetch_article(slug_or_id) do
+          create_post_from_article(article, url, opts)
         end
+    end
+  end
+
+  @doc """
+  Creates or updates a Bonfire Post from an already-fetched Ghost article map
+  (e.g. the `post.current` object delivered by a Ghost webhook).
+
+  Upserts by canonical URI: if a post already exists for `article["url"]` it is
+  updated (and un-hidden, in case it was previously unpublished); otherwise a
+  new post is created. Author is resolved via the shared fallback chain (see
+  `get_or_create_post_for_article/3`).
+  """
+  def import_article(article, opts \\ []) do
+    url = e(article, "url", nil)
+
+    case url && Peered.get_by_uri(url) do
+      {:ok, %{id: existing_id}} ->
+        info(existing_id, "found an existing post for article — updating")
+        # un-hide in case it had been unpublished before
+        maybe_unhide(existing_id)
+        update_post_from_article(existing_id, article, opts)
+
+      _ ->
+        create_post_from_article(article, url, opts)
+    end
+  end
+
+  @doc """
+  Hides (instance-wide) the Bonfire post for a Ghost article, without deleting
+  it — so any attached comment thread is preserved. Accepts an article map or a
+  canonical URL. Reversed by re-publishing (see `import_article/2`).
+  """
+  def hide_article(article_or_url, _opts \\ []) do
+    url = article_url(article_or_url)
+
+    case url && Peered.get_by_uri(url) do
+      {:ok, %{id: existing_id}} ->
+        Bonfire.Boundaries.Blocks.block(existing_id, :hide, :instance_wide)
+
+      _ ->
+        info(url, "no post found for article — nothing to hide")
+        {:ok, :not_found}
+    end
+  end
+
+  defp article_url(url) when is_binary(url), do: url
+  defp article_url(article) when is_map(article), do: e(article, "url", nil)
+  defp article_url(_), do: nil
+
+  # `:hide` blocks aren't detectable via `Blocks.is_blocked?` (that checks the
+  # silence/ghost circles, not object-discovery grants), so just attempt to
+  # reverse it — `unblock(:hide)` is a no-op when nothing was hidden.
+  defp maybe_unhide(post_id) do
+    Bonfire.Boundaries.Blocks.unblock(post_id, :hide, :instance_wide)
+  rescue
+    e -> warn(e, "Could not un-hide previously hidden Ghost post")
+  end
+
+  # Shared create path used by both the on-demand embed flow and webhook import.
+  defp create_post_from_article(article, url, opts) do
+    group_id = Keyword.get(opts, :group_id)
+    require_topic? = Keyword.get(opts, :require_topic, false)
+    boundary_opt = Keyword.get(opts, :boundary, nil)
+
+    with {:ok, author} <- require_author(article, opts),
+         {context_type, context} <- resolve_context(group_id, article),
+         :ok <- check_topic_requirement(require_topic?, context_type),
+         to_circles =
+           (context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || [],
+         boundary =
+           boundary_opt ||
+             ghost_visibility_to_boundary(e(article, "visibility", nil), context) ||
+             (context &&
+                Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
+             "public",
+         context_id = (context && Enums.id(context)) || nil,
+         published = e(article, "published_at", nil),
+         post_id = (published && DatesTimes.generate_ulid_if_past(published)) || nil,
+         {:ok, post} <-
+           Bonfire.Posts.publish(
+             current_user: author,
+             boundary: boundary,
+             to_circles: to_circles,
+             context_id: context_id,
+             mentions: [context_id],
+             post_id: post_id,
+             post_attrs: %{
+               id: post_id,
+               post_content: %{
+                 name: article["title"],
+                 summary: article["custom_excerpt"],
+                 html_body: article["html"] || ""
+               },
+               uploaded_media: primary_image_attachment(article)
+             }
+           ) do
+      maybe_save_canonical_uri(post, url)
+      {:ok, post}
+    end
+  end
+
+  defp update_post_from_article(post_id, article, opts) do
+    with {:ok, author} <- require_author(article, opts),
+         {:ok, _updated} <-
+           Bonfire.Social.PostContents.edit(author, post_id, %{
+             post_content: %{
+               name: article["title"],
+               summary: article["custom_excerpt"],
+               html_body: article["html"] || ""
+             }
+           }),
+         {:ok, post} <- Bonfire.Posts.read(post_id, skip_boundary_check: true) do
+      {:ok, post}
+    end
+  end
+
+  defp require_author(article, opts) do
+    case resolve_author(article, opts) do
+      nil ->
+        error(article, "No author could be resolved for Ghost article")
+        {:error, :no_author}
+
+      author ->
+        {:ok, author}
+    end
+  end
+
+  defp maybe_save_canonical_uri(_post, nil), do: :ok
+
+  defp maybe_save_canonical_uri(post, url) do
+    case Peered.save_canonical_uri(post, url) do
+      {:ok, _} ->
+        :ok
+
+      err ->
+        error(err, "Could not save canonical URI for Ghost article — duplicates may occur")
     end
   end
 
@@ -156,7 +252,14 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
-  defp resolve_author(article) do
+  # Shared author resolution
+  # Returns a user struct or ID or nil.
+  defp resolve_author(article, opts) do
+    resolve_ghost_author(article) || opts[:creator] || configured_default_author() ||
+      current_user(opts)
+  end
+
+  defp resolve_ghost_author(article) do
     primary_author =
       e(article, "primary_author", nil)
       |> debug("attempt to resolve author from article data")
@@ -167,6 +270,13 @@ defmodule Bonfire.Ghost.EmbedHelper do
     (ghost_id && fetch_and_provision_staff(ghost_id)) ||
       (slug && Config.get([:bonfire_ghost, :match_author_by_username], false) &&
          find_by_username(slug))
+  end
+
+  defp configured_default_author do
+    case Settings.get([:bonfire_ghost, :auto_import_as], nil, :instance) do
+      username when is_binary(username) and username != "" -> find_by_username(username)
+      _ -> nil
+    end
   end
 
   defp fetch_and_provision_staff(ghost_id) do
