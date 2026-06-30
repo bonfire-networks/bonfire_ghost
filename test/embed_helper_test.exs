@@ -36,9 +36,9 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
       assert {:error, :no_author} = EmbedHelper.import_article(article(), [])
     end
 
-    test "uses an explicit current_user when provided" do
+    test "uses an explicit creator when provided (overrides the configured default)" do
       explicit = Fake.fake_user!(%{}, %{username: "explicit_author"})
-      assert {:ok, _post} = EmbedHelper.import_article(article(), current_user: explicit)
+      assert {:ok, _post} = EmbedHelper.import_article(article(), creator: explicit)
     end
   end
 
