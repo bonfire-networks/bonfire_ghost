@@ -6,7 +6,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   alias Bonfire.Common.DatesTimes
   alias Bonfire.Common.Settings
   require Bonfire.Common.Settings
-  import Bonfire.Common.Utils, only: [current_user: 1]
+  import Bonfire.Common.Utils
   import Untangle
   alias Bonfire.Ghost
   alias Bonfire.Ghost.API
@@ -162,6 +162,18 @@ defmodule Bonfire.Ghost.EmbedHelper do
         error(article, "No author could be resolved for Ghost article")
         {:error, :no_author}
 
+      author when is_binary(author) ->
+        # only an id was resolved (e.g. the configured default author) — load the
+        # user with `character: [:peered]` (so federation's `is_local?` works) and
+        # `:settings` (so user-scoped settings lookups don't re-query)
+        case Bonfire.Me.Users.by_id(author) do
+          {:ok, user} ->
+            {:ok, Bonfire.Common.Repo.maybe_preload(user, [:settings, character: [:peered]])}
+
+          _ ->
+            {:error, :no_author}
+        end
+
       author ->
         {:ok, author}
     end
@@ -256,7 +268,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   # Returns a user struct or ID or nil.
   defp resolve_author(article, opts) do
     resolve_ghost_author(article) || opts[:creator] || configured_default_author() ||
-      current_user(opts)
+      current_user_or_id(opts)
   end
 
   defp resolve_ghost_author(article) do
@@ -272,9 +284,11 @@ defmodule Bonfire.Ghost.EmbedHelper do
          find_by_username(slug))
   end
 
+  # Returns the configured user ID as-is (no lookup) — it's passed straight to
+  # `Bonfire.Posts.publish`/`PostContents.edit` as the author.
   defp configured_default_author do
     case Settings.get([:bonfire_ghost, :auto_import_as], nil, :instance) do
-      username when is_binary(username) and username != "" -> find_by_username(username)
+      id when is_binary(id) and id != "" -> id
       _ -> nil
     end
   end

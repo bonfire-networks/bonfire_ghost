@@ -20,9 +20,9 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
 
   describe "import_article/2 author resolution" do
     test "falls back to the configured default author when none can be resolved" do
-      _author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
 
-      Settings.put([:bonfire_ghost, :auto_import_as], "ghostbot",
+      Settings.put([:bonfire_ghost, :auto_import_as], author.id,
         scope: :instance,
         skip_boundary_check: true
       )
@@ -44,9 +44,9 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
 
   describe "import_article/2 upsert" do
     setup do
-      _author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
 
-      Settings.put([:bonfire_ghost, :auto_import_as], "ghostbot",
+      Settings.put([:bonfire_ghost, :auto_import_as], author.id,
         scope: :instance,
         skip_boundary_check: true
       )

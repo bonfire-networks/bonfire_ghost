@@ -30,13 +30,13 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
 
   defp run(event, post), do: ArticleWebhookWorker.perform(job(event, post))
 
-  defp enable_auto_import!(author_username) do
+  defp enable_auto_import!(author) do
     Settings.put([:bonfire_ghost, :auto_import_articles], true,
       scope: :instance,
       skip_boundary_check: true
     )
 
-    Settings.put([:bonfire_ghost, :auto_import_as], author_username,
+    Settings.put([:bonfire_ghost, :auto_import_as], author.id,
       scope: :instance,
       skip_boundary_check: true
     )
@@ -61,7 +61,7 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
   describe "post.published" do
     setup do
       author = Fake.fake_user!(%{}, %{username: "ghostbot"})
-      enable_auto_import!("ghostbot")
+      enable_auto_import!(author)
       {:ok, author: author}
     end
 
@@ -85,8 +85,8 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
 
   describe "post.published.edited" do
     setup do
-      _author = Fake.fake_user!(%{}, %{username: "ghostbot"})
-      enable_auto_import!("ghostbot")
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      enable_auto_import!(author)
       :ok
     end
 
@@ -104,9 +104,9 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
 
   describe "post.unpublished / post.deleted — hide, never delete" do
     setup do
-      _author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
       viewer = Fake.fake_user!()
-      enable_auto_import!("ghostbot")
+      enable_auto_import!(author)
       {:ok, viewer: viewer}
     end
 
@@ -141,8 +141,8 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
 
   describe "unknown events" do
     test "cancels on an unrecognized event" do
-      _author = Fake.fake_user!(%{}, %{username: "ghostbot"})
-      enable_auto_import!("ghostbot")
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      enable_auto_import!(author)
 
       assert {:cancel, {:unknown_event, "post.whatever"}} =
                run("post.whatever", article())

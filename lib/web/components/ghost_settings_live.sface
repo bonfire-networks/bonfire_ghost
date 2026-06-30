@@ -144,10 +144,27 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
       </div>
     {/if}
 
-    {!-- Auto-import articles via webhooks --}
+    {!-- Article import (on-demand embeds + opt-in webhook auto-import) --}
     {#if Bonfire.Ghost.configured?()}
       <div class="card bg-base-100 border border-base-content/10">
         <div class="card-body gap-4">
+          {!-- Default author — used by BOTH iframe/embed imports and webhook auto-import,
+               so it is not gated behind the auto-import toggle. --}
+          <form phx-submit="Bonfire.Common.Settings:save">
+            <Bonfire.UI.Common.SettingsInputLive
+              keys={[:bonfire_ghost, :auto_import_as]}
+              scope={:instance}
+              name={l("Default author for imported articles")}
+              description={l(
+                "User ID that imported Ghost articles are attributed to when the article's Ghost author doesn't map to a local user. Used for both embedded articles and webhook auto-import."
+              )}
+              placeholder="user ID"
+              class="input input-bordered input-sm flex-1"
+            />
+          </form>
+
+          <div class="divider my-0" />
+
           <form phx-change="Bonfire.Common.Settings:set">
             <Bonfire.UI.Common.SettingsToggleLive
               keys={[:bonfire_ghost, :auto_import_articles]}
@@ -164,19 +181,6 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
               false,
               :instance
             ) in [true, "true", "1", "yes"]}
-            <form phx-submit="Bonfire.Common.Settings:save">
-              <Bonfire.UI.Common.SettingsInputLive
-                keys={[:bonfire_ghost, :auto_import_as]}
-                scope={:instance}
-                name={l("Default author username")}
-                description={l(
-                  "Posts are attributed to the article's Ghost author if it maps to a local user, otherwise to this user. Required unless every Ghost author has a matching local account."
-                )}
-                placeholder="username"
-                class="input input-bordered input-sm flex-1"
-              />
-            </form>
-
             <div class="text-sm text-base-content/70 mt-2">
               <p class="font-semibold">{l("Configure these webhooks in Ghost admin → Settings → Integrations:")}</p>
               <ul class="list-disc list-inside mt-1 font-mono text-xs">
