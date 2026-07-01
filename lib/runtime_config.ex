@@ -8,7 +8,12 @@ defmodule Bonfire.Ghost.RuntimeConfig do
     * `GHOST_CONTENT_API_KEY` - Your Ghost Content API key (for public posts)
     * `GHOST_ADMIN_API_KEY` - Your Ghost Admin API key (for members, drafts, etc.)
     * `GHOST_WEBHOOK_SECRET` - Shared secret Ghost signs webhook payloads with
-      (set the same value in the Ghost admin → Integrations → webhook "Secret" field)
+      (set the same value in the Ghost admin → Integrations → webhook "Secret" field).
+      Used for both member sync and (opt-in) article auto-import webhooks. The
+      latter is enabled per-instance via the `[:bonfire_ghost, :auto_import_articles]`
+      setting (toggle on `/ghost/settings`); configure Ghost webhooks pointing at
+      `/ghost/webhook/post.published`, `…/post.published.edited`,
+      `…/post.unpublished` and `…/post.deleted`.
     * `GHOST_GATED_MODE` - When `true`/`1`/`yes`, the Bonfire login page hides
       password+signup and shows a passwordless email-only form. Members who
       exist in Ghost (with any active tier) are provisioned on demand when
