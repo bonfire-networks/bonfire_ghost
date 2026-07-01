@@ -181,7 +181,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
               false,
               :instance
             ) in [true, "true", "1", "yes"]}
-            <div class="text-sm text-base-content/70 mt-2">
+            <div class="text-sm text-base-content mt-2">
               <p class="font-semibold">{l("Configure these webhooks in Ghost admin → Settings → Integrations:")}</p>
               <ul class="list-disc list-inside mt-1 font-mono text-xs">
                 <li>Post published → <span>{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published</span></li>
