@@ -1,7 +1,7 @@
 <div class="max-w-4xl mx-auto p-4">
   <div class="mb-8">
     <h1 class="text-3xl font-bold">{l("Ghost Blog")}</h1>
-    <p class="text-base-content/70 mt-2">{l("Posts from your connected Ghost blog")}</p>
+    <p class="text-base-content mt-2">{l("Posts from your connected Ghost blog")}</p>
   </div>
 
   {#if not @ghost_configured}
@@ -54,7 +54,7 @@ config :bonfire_ghost,
       </div>
     </div>
   {#elseif @posts == []}
-    <div class="text-center py-12 text-base-content/60">
+    <div class="text-center py-12 text-muted">
       <p>{l("No posts found in your Ghost blog.")}</p>
     </div>
   {#else}
@@ -73,7 +73,7 @@ config :bonfire_ghost,
               </a>
             </h2>
 
-            <div class="flex items-center gap-2 text-sm text-base-content/60">
+            <div class="flex items-center gap-2 text-sm text-muted">
               {#if published_at = post["published_at"]}
                 <time datetime={published_at}>
                   {format_date(published_at)}

@@ -3,7 +3,7 @@
   <div class="flex items-center justify-between">
     <!-- <div>
       <h2 class="text-2xl font-bold">{l("Ghost Blog Integration")}</h2>
-      <p class="text-base-content/70">{l("Connect and manage your Ghost blog")}</p>
+      <p class="text-base-content">{l("Connect and manage your Ghost blog")}</p>
     </div> -->
     <button
       :if={@settings}
@@ -58,7 +58,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
               {@settings["title"] || l("Untitled Blog")}
               <span class="badge badge-sm">{@settings["version"]}</span>
             </h3>
-            <p :if={desc = @settings["description"]} class="text-base-content/70">{desc}</p>
+            <p :if={desc = @settings["description"]} class="text-base-content">{desc}</p>
             <a
               href={@settings["url"]}
               target="_blank"
@@ -76,15 +76,15 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
         {!-- Blog Stats/Info --}
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
-            <span class="text-base-content/60">{l("Language")}</span>
+            <span class="text-muted">{l("Language")}</span>
             <p class="font-medium">{@settings["locale"] || @settings["lang"] || "-"}</p>
           </div>
           <div>
-            <span class="text-base-content/60">{l("Timezone")}</span>
+            <span class="text-muted">{l("Timezone")}</span>
             <p class="font-medium">{@settings["timezone"] || "-"}</p>
           </div>
           <div>
-            <span class="text-base-content/60">{l("Members")}</span>
+            <span class="text-muted">{l("Members")}</span>
             <p class="font-medium">
               {#if @settings["members_enabled"]}
                 <span class="text-success">{l("Enabled")}</span>
@@ -94,7 +94,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             </p>
           </div>
           <div>
-            <span class="text-base-content/60">{l("Paid Tiers")}</span>
+            <span class="text-muted">{l("Paid Tiers")}</span>
             <p class="font-medium">
               {#if @settings["paid_members_enabled"]}
                 <span class="text-success">{l("Enabled")}</span>
@@ -155,7 +155,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             </h3>
             <div class="flex items-center gap-3">
               {#if @last_sync}
-                <span class="text-xs text-base-content/60">
+                <span class="text-xs text-muted">
                   {l("Last sync")}: {format_date(DateTime.to_iso8601(@last_sync.at))} ·
                   {l("%{n} new", n: @last_sync.summary.created)},
                   {l("%{n} refreshed", n: @last_sync.summary.updated)},
@@ -186,14 +186,14 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             </div>
           </div>
 
-          <p class="text-sm text-base-content/70 mb-4">
+          <p class="text-sm text-base-content mb-4">
             {l(
               "Turn each Ghost tier into a Bonfire circle. Admins can then grant these circles access anywhere in Bonfire's boundaries system."
             )}
           </p>
 
           {#if Config.get([:bonfire_ui_me, :login, :passwordless_only], false) == true}
-            <p class="text-sm text-base-content/70 mb-2">
+            <p class="text-sm text-base-content mb-2">
               {l("Check the tiers required to log in to Bonfire. Leave all unchecked to allow any Ghost member.")}
             </p>
           {/if}
@@ -228,7 +228,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
                   </div>
 
                   {#if desc = tier["description"]}
-                    <p class="text-sm text-base-content/70">{desc}</p>
+                    <p class="text-sm text-base-content">{desc}</p>
                   {/if}
 
                   <div class="mt-auto pt-3">
@@ -281,7 +281,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
           </div>
 
           {#if @members == []}
-            <div class="text-center py-8 text-base-content/60">
+            <div class="text-center py-8 text-muted">
               <span class="iconify text-4xl mb-2" data-icon="heroicons:users" />
               <p>{l("No members found")}</p>
             </div>
@@ -316,7 +316,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
                           <span class="iconify text-lg text-base-content/30" data-icon="heroicons:x-circle-solid" />
                         {/if}
                       </td>
-                      <td class="text-sm text-base-content/70">
+                      <td class="text-sm text-base-content">
                         {format_date(member["created_at"])}
                       </td>
                     </tr>
