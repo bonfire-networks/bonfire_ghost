@@ -163,6 +163,38 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             />
           </form>
 
+          {!-- Default group/topic — imported articles are posted into this group (or
+               topic) so they appear in its feed. Used by BOTH webhook auto-import and
+               embeds; an embed's `data-group-id` param still overrides per-request. --}
+          <form phx-submit="Bonfire.Common.Settings:save">
+            <Bonfire.UI.Common.SettingsInputLive
+              keys={[:bonfire_ghost, :post_into_group]}
+              scope={:instance}
+              name={l("Post imported articles into group/topic")}
+              description={l(
+                "Optional. ID (or username) of a group or topic that imported Ghost articles are posted into, so they show up in its feed. Used for both embedded articles and webhook auto-import (an embed's data-group-id parameter overrides this)."
+              )}
+              placeholder="group ID or @username"
+              class="input input-bordered input-sm flex-1"
+            />
+          </form>
+
+          {#if Bonfire.Common.Settings.get([:bonfire_ghost, :post_into_group], nil, :instance) not in [
+              nil,
+              ""
+            ]}
+            <form phx-change="Bonfire.Common.Settings:set">
+              <Bonfire.UI.Common.SettingsToggleLive
+                keys={[:bonfire_ghost, :require_topic]}
+                scope={:instance}
+                name={l("Only import articles matching a topic")}
+                description={l(
+                  "When enabled, only import articles whose primary tag maps to a topic within the group above. Articles that don't match a topic are skipped."
+                )}
+              />
+            </form>
+          {/if}
+
           <div class="divider my-0" />
 
           <form phx-change="Bonfire.Common.Settings:set">
