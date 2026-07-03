@@ -259,29 +259,49 @@ defmodule Bonfire.Ghost.EmbedHelper do
   end
 
   defp resolve_context(group_id, article) when is_binary(group_id) do
-    # otherwise try with just group
+    case Bonfire.Classify.Categories.get(group_id, skip_boundary_check: true) do
+      {:ok, target} ->
+        if topic?(target) do
+          {:topic, target}
+        else
+          resolve_topic_in_group(target, article) || {:group, target}
+        end
+
+      _ ->
+        {:no_context, nil}
+    end
+  end
+
+  defp resolve_topic_in_group(group, article) do
     with slug when is_binary(slug) <- e(article, "primary_tag", "slug", nil),
          {:ok, topic} <-
            Bonfire.Classify.Categories.one(
-             [username: slug, parent_category: group_id],
+             [username: slug, parent_category: Enums.id(group)],
              skip_boundary_check: true
            ) do
       {:topic, topic}
     else
       _ -> nil
-    end ||
-      case Bonfire.Classify.Categories.get(group_id, skip_boundary_check: true) do
-        {:ok, group} -> {:group, group}
-        _ -> {:no_context, nil}
-      end
+    end
+  end
+
+  defp topic?(category) do
+    e(category, :type, nil) in [:topic, "topic"]
   end
 
   defp resolve_context(nil, article) do
     slug = e(article, "primary_tag", "slug", nil)
 
     case slug && Bonfire.Classify.Categories.get(slug, skip_boundary_check: true) do
-      {:ok, topic} -> {:topic, topic}
-      _ -> {:no_context, nil}
+      {:ok, topic} ->
+        if topic?(topic) do
+          {:topic, topic}
+        else
+          {:no_context, nil}
+        end
+
+      _ ->
+        {:no_context, nil}
     end
   end
 

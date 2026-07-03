@@ -257,6 +257,14 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
       })
     end
 
+    defp topic!(creator, group, attrs \\ %{}) do
+      Bonfire.Classify.Simulate.fake_category!(
+        creator,
+        group,
+        Map.merge(%{type: :topic, name: "Ghost News"}, attrs)
+      )
+    end
+
     test "imported article reaches the target group's feed (via group_id opt)" do
       creator = Fake.fake_user!()
       group = group!(creator)
@@ -283,6 +291,23 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
              )
     end
 
+    test "the post_into_group instance setting can target a topic directly" do
+      creator = Fake.fake_user!()
+      group = group!(creator)
+      topic = topic!(creator, group)
+
+      Process.put([:bonfire_ghost, :auto_import_as], creator.id)
+      Process.put([:bonfire_ghost, :post_into_group], topic.id)
+      Process.put([:bonfire_ghost, :require_topic], true)
+
+      assert {:ok, post} = EmbedHelper.import_article(article(), [])
+
+      assert Bonfire.Social.FeedLoader.feed_contains?(:user_activities, post,
+               by: topic,
+               current_user: creator
+             )
+    end
+
     test "explicit group_id opt overrides the post_into_group setting" do
       creator = Fake.fake_user!()
       setting_group = group!(creator)
@@ -299,6 +324,22 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
 
       refute Bonfire.Social.FeedLoader.feed_contains?(:user_activities, post,
                by: setting_group,
+               current_user: creator
+             )
+    end
+
+    test "explicit group_id opt can target a topic directly" do
+      creator = Fake.fake_user!()
+      group = group!(creator)
+      topic = topic!(creator, group)
+
+      Process.put([:bonfire_ghost, :auto_import_as], creator.id)
+      Process.put([:bonfire_ghost, :require_topic], true)
+
+      assert {:ok, post} = EmbedHelper.import_article(article(), group_id: topic.id)
+
+      assert Bonfire.Social.FeedLoader.feed_contains?(:user_activities, post,
+               by: topic,
                current_user: creator
              )
     end

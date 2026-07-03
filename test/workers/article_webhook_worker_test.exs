@@ -31,6 +31,31 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
 
   defp run(event, post), do: ArticleWebhookWorker.perform(job(event, post))
 
+  defp read_imported!(post) do
+    {:ok, reloaded} =
+      Posts.read(post.id,
+        skip_boundary_check: true,
+        schema: Types.object_type(post)
+      )
+
+    reloaded
+  end
+
+  defp group!(creator) do
+    Bonfire.Classify.Simulate.fake_group!(creator, %{
+      membership: "local:members",
+      visibility: "nonfederated",
+      participation: "anyone"
+    })
+  end
+
+  defp topic!(creator, group) do
+    Bonfire.Classify.Simulate.fake_category!(creator, group, %{
+      type: :topic,
+      name: "Ghost News"
+    })
+  end
+
   defp enable_auto_import!(author) do
     Settings.put([:bonfire_ghost, :auto_import_articles], true,
       scope: :instance,
@@ -88,6 +113,21 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
       assert {:ok, post_b} = run("post.published", article())
       assert post_a.id == post_b.id
     end
+
+    test "auto-import can publish directly into the configured topic", %{author: author} do
+      group = group!(author)
+      topic = topic!(author, group)
+
+      Process.put([:bonfire_ghost, :post_into_group], topic.id)
+      Process.put([:bonfire_ghost, :require_topic], true)
+
+      assert {:ok, post} = run("post.published", article())
+
+      assert FeedLoader.feed_contains?(:user_activities, post,
+               by: topic,
+               current_user: author
+             )
+    end
   end
 
   describe "post.published.edited" do
@@ -104,7 +144,7 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
                run("post.published.edited", article(title: "Edited title"))
 
       assert updated.id == post.id
-      reloaded = Posts.read(post.id, skip_boundary_check: true) |> elem(1)
+      reloaded = read_imported!(post)
       assert reloaded.post_content.name == "Edited title"
     end
   end
@@ -124,7 +164,7 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
       assert {:ok, _} = run("post.unpublished", article())
       refute FeedLoader.feed_contains?(:local, post, viewer)
       # still present, not deleted
-      assert {:ok, _} = Posts.read(post.id, skip_boundary_check: true)
+      assert read_imported!(post)
     end
 
     test "delete hides the post from local feeds but keeps it", %{viewer: viewer} do
@@ -133,7 +173,7 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
 
       assert {:ok, _} = run("post.deleted", article())
       refute FeedLoader.feed_contains?(:local, post, viewer)
-      assert {:ok, _} = Posts.read(post.id, skip_boundary_check: true)
+      assert read_imported!(post)
     end
 
     test "re-publishing after an unpublish un-hides the post", %{viewer: viewer} do
