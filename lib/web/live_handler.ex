@@ -13,6 +13,7 @@ defmodule Bonfire.Ghost.LiveHandler do
   alias Bonfire.Ghost.API
   alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Sync
+  alias Bonfire.Ghost.Workers.MemberSyncWorker
 
   # Ghost API include lists — keep in sync with what the settings page renders.
   @members_include "labels,newsletters"
@@ -70,6 +71,34 @@ defmodule Bonfire.Ghost.LiveHandler do
          socket
          |> assign(:syncing, false)
          |> assign_flash(:error, l("Ghost tier sync failed: %{reason}", reason: inspect(reason)))}
+    end
+  end
+
+  def handle_event("sync_members", _params, socket) do
+    cond do
+      not Ghost.admin_configured?() ->
+        {:noreply, assign_flash(socket, :error, l("Ghost Admin API is not configured"))}
+
+      true ->
+        case MemberSyncWorker.new(%{}) |> Oban.insert() do
+          {:ok, _job} ->
+            {:noreply,
+             assign_flash(
+               socket,
+               :info,
+               l(
+                 "Ghost member backfill started. Tiers will sync first, then existing members will be added to their circles."
+               )
+             )}
+
+          {:error, reason} ->
+            {:noreply,
+             assign_flash(
+               socket,
+               :error,
+               l("Ghost member backfill could not be started: %{reason}", reason: inspect(reason))
+             )}
+        end
     end
   end
 

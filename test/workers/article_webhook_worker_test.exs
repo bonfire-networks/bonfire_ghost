@@ -4,6 +4,7 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
   use Bonfire.Ghost.DataCase, async: false
 
   alias Bonfire.Ghost.Workers.ArticleWebhookWorker
+  alias Bonfire.Common.Types
   alias Bonfire.Common.Settings
   alias Bonfire.Posts
   alias Bonfire.Federate.ActivityPub.Peered
@@ -74,6 +75,12 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
       # backdated to published_at
       date = Bonfire.Common.DatesTimes.date_from_pointer(post.id)
       assert date.year == 2024 and date.month == 1 and date.day == 15
+    end
+
+    test "imports Ghost posts as article objects" do
+      assert {:ok, post} = run("post.published", article())
+
+      assert Types.object_type(post) == Bonfire.Articles.Article
     end
 
     test "is idempotent — re-publishing the same URL does not duplicate" do

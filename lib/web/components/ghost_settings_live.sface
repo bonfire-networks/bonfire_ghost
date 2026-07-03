@@ -182,7 +182,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
               :instance
             ) in [true, "true", "1", "yes"]}
             <div class="text-sm text-base-content mt-2">
-              <p class="font-semibold">{l("Configure these webhooks in Ghost admin → Settings → Integrations:")}</p>
+              <p class="font-medium">{l("Configure these webhooks in Ghost admin → Settings → Integrations:")}</p>
               <ul class="list-disc list-inside mt-1 font-mono text-xs">
                 <li>Post published → <span>{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published</span></li>
                 <li>Published post updated → <span>{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published.edited</span></li>
@@ -268,7 +268,7 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
                     </form>
                   {/if}
                   <div class="flex items-center justify-between gap-2">
-                    <h4 class="font-semibold text-lg">{tier["name"]}</h4>
+                    <h4 class="font-medium text-lg">{tier["name"]}</h4>
                     <div class="flex gap-1 shrink-0">
                       {#if !tier["active"]}
                         <span class="badge badge-xs badge-warning">{l("archived")}</span>
@@ -330,7 +330,22 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
                 <span class="badge badge-ghost">{@page_info.total}</span>
               {/if}
             </h3>
+            <button
+              id="ghost-sync-members"
+              class="btn btn-primary btn-sm gap-2"
+              phx-click="Bonfire.Ghost:sync_members"
+              phx-target={@myself}
+            >
+              <span class="iconify" data-icon="heroicons:arrow-path-rounded-square-20-solid" />
+              {l("Sync members")}
+            </button>
           </div>
+
+          <p class="text-sm text-base-content mb-4">
+            {l(
+              "Run a one-off background backfill after syncing tiers. Webhooks and Ghost sign-in keep future member changes in sync."
+            )}
+          </p>
 
           {#if @members == []}
             <div class="text-center py-8 text-muted">

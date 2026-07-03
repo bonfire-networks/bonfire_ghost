@@ -2,9 +2,12 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
   # `async: false` because `Sync.Members` touches instance-scoped circles
   # (shared state) and provisions global Accounts.
   use Bonfire.Ghost.DataCase, async: false
+  use Repatch.ExUnit
 
   alias Bonfire.Boundaries.Circles
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
+  alias Bonfire.Ghost
+  alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Sync.Members
   alias Bonfire.Ghost.Sync.Tiers
   alias Bonfire.Me.Accounts
@@ -222,6 +225,150 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
     test "is a no-op when the account doesn't exist" do
       assert {:ok, %{removed: 0}} =
                Members.remove_member(%{"email" => "nobody@test.local"})
+    end
+  end
+
+  describe "sync_all/1 backfill" do
+    test "provisions all paginated Ghost members into their tier circles" do
+      setup_tiers([@tier_free, @tier_paid])
+
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
+
+      Repatch.patch(AdminAPI, :list_members, fn :ghost_client, opts ->
+        case Keyword.fetch!(opts, :page) do
+          1 ->
+            {:ok,
+             %{
+               "members" => [
+                 member("free-backfill@test.local", tiers: [@tier_free])
+               ],
+               "meta" => %{"pagination" => %{"page" => 1, "next" => 2}}
+             }}
+
+          2 ->
+            {:ok,
+             %{
+               "members" => [
+                 member("paid-backfill@test.local", tiers: [@tier_paid])
+               ],
+               "meta" => %{"pagination" => %{"page" => 2, "next" => nil}}
+             }}
+        end
+      end)
+
+      assert {:ok, %{provisioned: 2, errors: []}} = Members.sync_all()
+
+      free_user =
+        "free-backfill@test.local"
+        |> Accounts.get_by_email()
+        |> Users.by_account!()
+        |> hd()
+
+      paid_user =
+        "paid-backfill@test.local"
+        |> Accounts.get_by_email()
+        |> Users.by_account!()
+        |> hd()
+
+      assert Circles.is_encircled_by?(free_user, tier_circle("free"))
+      refute Circles.is_encircled_by?(free_user, tier_circle("paid"))
+      assert Circles.is_encircled_by?(paid_user, tier_circle("paid"))
+    end
+
+    test "resolves tier circles once for the whole run when tiers are passed in" do
+      setup_tiers([@tier_free, @tier_paid])
+
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
+
+      Repatch.patch(AdminAPI, :list_members, fn :ghost_client, _opts ->
+        {:ok,
+         %{
+           "members" => [
+             member("batch-free@test.local", tiers: [@tier_free]),
+             member("batch-paid@test.local", tiers: [@tier_paid])
+           ],
+           "meta" => %{"pagination" => %{"page" => 1, "next" => nil}}
+         }}
+      end)
+
+      assert {:ok, %{provisioned: 2, errors: []}} =
+               Members.sync_all(tiers: [@tier_free, @tier_paid])
+
+      free_user =
+        "batch-free@test.local"
+        |> Accounts.get_by_email()
+        |> Users.by_account!()
+        |> hd()
+
+      paid_user =
+        "batch-paid@test.local"
+        |> Accounts.get_by_email()
+        |> Users.by_account!()
+        |> hd()
+
+      assert Circles.is_encircled_by?(free_user, tier_circle("free"))
+      assert Circles.is_encircled_by?(paid_user, tier_circle("paid"))
+      refute Circles.is_encircled_by?(paid_user, tier_circle("free"))
+    end
+
+    test "uses a fresh Admin API client for each page" do
+      setup_tiers([@tier_free, @tier_paid])
+      parent = self()
+      {:ok, agent} = Agent.start_link(fn -> 0 end)
+
+      Repatch.patch(Ghost, :admin_client, fn ->
+        page = Agent.get_and_update(agent, fn count -> {count + 1, count + 1} end)
+        send(parent, {:admin_client_created, page})
+        {:ok, {:ghost_client, page}}
+      end)
+
+      Repatch.patch(AdminAPI, :list_members, fn {:ghost_client, client_page}, opts ->
+        page = Keyword.fetch!(opts, :page)
+        assert client_page == page
+
+        case page do
+          1 ->
+            {:ok,
+             %{
+               "members" => [
+                 member("fresh-first@test.local", tiers: [@tier_free])
+               ],
+               "meta" => %{"pagination" => %{"page" => 1, "next" => 2}}
+             }}
+
+          2 ->
+            {:ok,
+             %{
+               "members" => [
+                 member("fresh-second@test.local", tiers: [@tier_paid])
+               ],
+               "meta" => %{"pagination" => %{"page" => 2, "next" => nil}}
+             }}
+        end
+      end)
+
+      assert {:ok, %{provisioned: 2, errors: []}} = Members.sync_all()
+
+      assert_receive {:admin_client_created, 1}
+      assert_receive {:admin_client_created, 2}
+    end
+
+    test "stops instead of looping when pagination does not advance" do
+      setup_tiers([@tier_free])
+
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
+
+      Repatch.patch(AdminAPI, :list_members, fn :ghost_client, _opts ->
+        {:ok,
+         %{
+           "members" => [
+             member("loop@test.local", tiers: [@tier_free])
+           ],
+           "meta" => %{"pagination" => %{"page" => 1, "next" => 1}}
+         }}
+      end)
+
+      assert {:ok, %{provisioned: 1, errors: []}} = Members.sync_all()
     end
   end
 end

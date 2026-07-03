@@ -55,6 +55,15 @@ defmodule Bonfire.Ghost.Sync.TiersTest do
       assert circle.extra_info.summary == "Ghost tier: Free (updated)"
       assert circle.extra_info.info["display_name"] == "Free (updated)"
     end
+
+    test "stores tier type for paid-circle auto-detection" do
+      assert {:ok, :created} = Tiers.sync_tier(Map.put(@paid, "type", "paid"), [])
+
+      {:ok, circle} = lookup("paid")
+      circle = Bonfire.Common.Repo.maybe_preload(circle, :extra_info)
+
+      assert circle.extra_info.info["type"] == "paid"
+    end
   end
 
   describe "sync_tiers/2 archiving" do
