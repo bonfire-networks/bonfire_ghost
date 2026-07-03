@@ -100,18 +100,24 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
   # Shared create path used by both the on-demand embed flow and webhook import.
   defp create_post_from_article(article, url, opts) do
-    group_id = Keyword.get(opts, :group_id)
-    require_topic? = Keyword.get(opts, :require_topic, false)
+    group_id = Keyword.get(opts, :group_id) || configured_default_group()
+    require_topic? = Keyword.get(opts, :require_topic, configured_require_topic())
     boundary_opt = Keyword.get(opts, :boundary, nil)
 
     with {:ok, author} <- require_author(article, opts),
          {context_type, context} <- resolve_context(group_id, article),
          :ok <- check_topic_requirement(require_topic?, context_type),
+         :ok <- ensure_author_can_post(author, context, group_id),
+         # Only PAID tiers gate `:read` — a free tier is open signup, not a paywall
+         # (see `article_boundary/2`). So tier circles are granted `:read` only when
+         # the article is actually paid-gated.
+         read_circles = (requires_paid?(article) && tier_circles_for_article(article)) || [],
          to_circles =
-           (context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || [],
+           ((context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || []) ++
+             read_circles,
          boundary =
            boundary_opt ||
-             ghost_visibility_to_boundary(e(article, "visibility", nil), context) ||
+             article_boundary(article, context) ||
              (context &&
                 Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
              "public",
@@ -121,6 +127,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
          {:ok, post} <-
            Bonfire.Posts.publish(
              current_user: author,
+             # publish as an Article (the epic reuses the same logic, just with the
+             # `Article` schema, so the activity UI treats it as an article) when the
+             # extension is enabled; a nil schema falls back to a plain Post.
+             schema: article_schema(author),
              boundary: boundary,
              to_circles: to_circles,
              context_id: context_id,
@@ -151,9 +161,13 @@ defmodule Bonfire.Ghost.EmbedHelper do
                html_body: article["html"] || ""
              }
            }),
-         {:ok, post} <- Bonfire.Posts.read(post_id, skip_boundary_check: true) do
+         {:ok, post} <- read_imported(post_id, author) do
       {:ok, post}
     end
+  end
+
+  defp read_imported(post_id, author) do
+    Bonfire.Posts.read(post_id, skip_boundary_check: true, schema: article_schema(author))
   end
 
   defp require_author(article, opts) do
@@ -217,6 +231,32 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp check_topic_requirement(false, _context_type), do: :ok
   defp check_topic_requirement(true, :topic), do: :ok
   defp check_topic_requirement(true, _context_type), do: {:error, :topic_required}
+
+  # `Bonfire.Articles.Article` schema when the extension is enabled, else nil (→ Post).
+  defp article_schema(author) do
+    if Bonfire.Common.Extend.module_enabled?(Bonfire.Articles, author),
+      do: Bonfire.Articles.Article
+  end
+
+  # An imported article only lands in a group/topic feed if its author can post
+  # there, which (for a topic especially) requires group membership. Idempotently
+  # add the configured import author to the target group so auto-import "just works"
+  # without an admin manually managing the bot's membership. Always returns `:ok`
+  # (a failure to join is warned, not fatal, the post is still created).
+  defp ensure_author_can_post(_author, nil, _group_id), do: :ok
+
+  defp ensure_author_can_post(author, context, group_id) do
+    target = group_id || Enums.id(context)
+
+    case Bonfire.Classify.Categories.join_group(author, target, skip_boundary_check: true) do
+      {:ok, _} ->
+        :ok
+
+      other ->
+        warn(other, "Could not add import author to group/topic — post may not reach its feed")
+        :ok
+    end
+  end
 
   defp resolve_context(group_id, article) when is_binary(group_id) do
     # otherwise try with just group
@@ -287,10 +327,25 @@ defmodule Bonfire.Ghost.EmbedHelper do
   # Returns the configured user ID as-is (no lookup) — it's passed straight to
   # `Bonfire.Posts.publish`/`PostContents.edit` as the author.
   defp configured_default_author do
-    case Settings.get([:bonfire_ghost, :auto_import_as], nil, :instance) do
+    case Config.get([:bonfire_ghost, :auto_import_as], nil) do
       id when is_binary(id) and id != "" -> id
       _ -> nil
     end
+  end
+
+  # Instance-wide group/topic that webhook auto-import and embeds post into by
+  # default (an embed's `data-group-id` param still overrides via `:group_id` opt).
+  defp configured_default_group do
+    case Config.get([:bonfire_ghost, :post_into_group], nil) do
+      id when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  # When enabled, only import articles whose primary tag maps to a Bonfire topic
+  # (articles that only resolve to the group — or to nothing — are skipped).
+  defp configured_require_topic do
+    Config.get([:bonfire_ghost, :require_topic], false) in [true, "true", "1", "yes"]
   end
 
   defp fetch_and_provision_staff(ghost_id) do
@@ -314,20 +369,128 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
   # In a group context: "public" falls through to the group DCV; restricted visibilitym maps to group-aware presets
   # TODO: only share with a particular circle?
-  defp ghost_visibility_to_boundary("paid", context) when not is_nil(context),
-    do: "nonfederated:preview"
+  defp article_boundary(article, context) do
+    case article_access(article) do
+      :public -> "public"
+      # grouped `:local` falls through to the group's default content visibility (nil)
+      :local -> if context, do: nil, else: "local"
+      # see-only preview: public gets `:see` (preview card), `:read` only via the paid
+      # `ghost_tier:*` circles granted in `to_circles`
+      :paid -> if context, do: "nonfederated:preview", else: "local:preview"
+    end
+  end
 
-  # defp ghost_visibility_to_boundary("tiers", context) when not is_nil(context), do: "members:private"
-  defp ghost_visibility_to_boundary("members", context) when not is_nil(context),
-    do: "nonfederated:preview"
+  # `:public | :local | :paid` — the effective read-access requirement. A free tier is
+  # open signup (NOT a paywall), so `members` and `tiers` a free tier can satisfy are
+  # `:local` (any logged-in user reads; guests get `:see`/preview); only paid-only tiers
+  # (and `"paid"`) gate.
+  defp article_access(article) do
+    case e(article, "visibility", nil) do
+      "public" -> :public
+      "members" -> :local
+      "tiers" -> if tiers_include_free?(article), do: :local, else: :paid
+      "paid" -> :paid
+      _ -> :public
+    end
+  end
 
-  defp ghost_visibility_to_boundary("public", context) when not is_nil(context),
-    do: "nonfederated"
+  defp requires_paid?(article), do: article_access(article) == :paid
 
-  # Without a group: map to standard non-group presets.
-  defp ghost_visibility_to_boundary("members", _), do: "discoverable"
-  defp ghost_visibility_to_boundary("paid", _), do: "local"
-  # defp ghost_visibility_to_boundary("tiers", _), do: "local"
-  defp ghost_visibility_to_boundary("public", _), do: "public"
-  defp ghost_visibility_to_boundary(_, _), do: nil
+  @tier_circle_prefix "ghost_tier:"
+
+  @doc """
+  The `ghost_tier:*` circle ids a restricted article should be shared with, based on
+  its Ghost `visibility`:
+
+    - `"tiers"`   → the circles named after each slug in `article["tiers"]`
+    - `"paid"`    → all tier circles whose stored type is `"paid"`
+                    (fallback: all tier circles if none carry type info, e.g. pre-A4 sync)
+    - `"members"` → all `ghost_tier:*` circles
+    - anything else → `[]`
+
+  Warns (and skips) when a referenced tier slug has no synced circle yet.
+  """
+  def tier_circles_for_article(article) do
+    case e(article, "visibility", nil) do
+      "tiers" ->
+        article
+        |> e("tiers", [])
+        |> Enum.map(&e(&1, "slug", nil))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.flat_map(&tier_circle_id_for_slug/1)
+
+      "paid" ->
+        all = all_ghost_tier_circles()
+        paid = Enum.filter(all, &(tier_circle_type(&1) == "paid"))
+
+        cond do
+          paid != [] -> Enum.map(paid, & &1.id)
+          # no type info at all (pre-A4 sync) → fall back to every tier circle
+          Enum.all?(all, &(tier_circle_type(&1) in [nil, ""])) -> Enum.map(all, & &1.id)
+          true -> []
+        end
+
+      "members" ->
+        Enum.map(all_ghost_tier_circles(), & &1.id)
+
+      _ ->
+        []
+    end
+  end
+
+  defp tier_circle_id_for_slug(slug) do
+    case Bonfire.Boundaries.Circles.get_by_name(
+           @tier_circle_prefix <> slug,
+           Bonfire.Boundaries.Scaffold.Instance.admin_circle()
+         ) do
+      {:ok, circle} ->
+        [circle.id]
+
+      _ ->
+        warn(slug, "No ghost_tier circle for slug yet — article not shared with this tier")
+        []
+    end
+  end
+
+  defp all_ghost_tier_circles do
+    Bonfire.Boundaries.Circles.list_my(:instance)
+    |> Enum.filter(fn
+      %{named: %{name: name}} when is_binary(name) ->
+        String.starts_with?(name, @tier_circle_prefix)
+
+      _ ->
+        false
+    end)
+  end
+
+  # info keys may be strings (jsonb roundtrip) or atoms (freshly created) — check both.
+  defp tier_circle_type(circle) do
+    info = e(circle, :extra_info, :info, %{})
+    Map.get(info, "ghost_tier_type") || Map.get(info, :ghost_tier_type)
+  end
+
+  # Does the article list any tier that is a free (open-signup) tier? Resolved via the
+  # synced `ghost_tier:<slug>` circle's stored type — an unsynced/unknown tier is treated
+  # as non-free (i.e. paid-gated) so we never accidentally expose paid content.
+  defp tiers_include_free?(article) do
+    article
+    |> e("tiers", [])
+    |> Enum.any?(&free_tier?(e(&1, "slug", nil)))
+  end
+
+  defp free_tier?(slug) when is_binary(slug) do
+    case Bonfire.Boundaries.Circles.get_by_name(
+           @tier_circle_prefix <> slug,
+           Bonfire.Boundaries.Scaffold.Instance.admin_circle()
+         ) do
+      {:ok, circle} ->
+        # `get_by_name` preloads `:named`/`:caretaker` but not `:extra_info` (where the type lives)
+        tier_circle_type(Bonfire.Common.Repo.maybe_preload(circle, :extra_info)) == "free"
+
+      _ ->
+        false
+    end
+  end
+
+  defp free_tier?(_), do: false
 end

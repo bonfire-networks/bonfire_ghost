@@ -8,8 +8,8 @@ defmodule Bonfire.Ghost.Sync.TiersTest do
   alias Bonfire.Ghost.Sync.Tiers
   alias Bonfire.Me.Fake
 
-  @free %{"id" => "tier_free_1", "slug" => "free", "name" => "Free"}
-  @paid %{"id" => "tier_paid_1", "slug" => "paid", "name" => "Paid"}
+  @free %{"id" => "tier_free_1", "slug" => "free", "name" => "Free", "type" => "free"}
+  @paid %{"id" => "tier_paid_1", "slug" => "paid", "name" => "Paid", "type" => "paid"}
 
   defp lookup(slug),
     do: Circles.get_by_name("ghost_tier:#{slug}", InstanceScaffold.admin_circle())
@@ -63,6 +63,30 @@ defmodule Bonfire.Ghost.Sync.TiersTest do
       circle = Bonfire.Common.Repo.maybe_preload(circle, :extra_info)
 
       assert circle.extra_info.info["type"] == "paid"
+    end
+  end
+
+  describe "tier type in circle_info (A4)" do
+    test "stores the Ghost tier type so paid-ness is locally resolvable" do
+      assert {:ok, :created} = Tiers.sync_tier(@paid, [])
+
+      {:ok, circle} = lookup("paid")
+      circle = Bonfire.Common.Repo.maybe_preload(circle, :extra_info)
+      assert circle.extra_info.info["ghost_tier_type"] == "paid"
+    end
+
+    test "idempotent re-sync backfills the type on a circle created without it" do
+      # a circle created before the type was tracked (payload without "type")
+      assert {:ok, :created} = Tiers.sync_tier(Map.delete(@paid, "type"), [])
+      {:ok, circle} = lookup("paid")
+      circle = Bonfire.Common.Repo.maybe_preload(circle, :extra_info)
+      refute circle.extra_info.info["ghost_tier_type"]
+
+      # re-syncing with the type present drifts → :updated, backfilling it
+      assert {:ok, :updated} = Tiers.sync_tier(@paid, [])
+      {:ok, circle} = lookup("paid")
+      circle = Bonfire.Common.Repo.maybe_preload(circle, :extra_info)
+      assert circle.extra_info.info["ghost_tier_type"] == "paid"
     end
   end
 

@@ -98,14 +98,14 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   def sync_tier(tier, opts \\ [])
 
   def sync_tier(
-        %{"slug" => slug, "name" => name, "id" => ghost_tier_id},
+        %{"slug" => slug, "name" => name, "id" => ghost_tier_id} = tier,
         _opts
       )
       when is_binary(slug) and is_binary(name) do
     if Regex.match?(@slug_regex, slug) do
       circle_name = @circle_prefix <> slug
 
-      case ensure_circle(circle_name, name, slug, ghost_tier_id) do
+      case ensure_circle(circle_name, name, slug, ghost_tier_id, tier["type"]) do
         {:ok, _circle, state} -> {:ok, state}
         {:error, reason} -> {:error, reason}
       end
@@ -122,17 +122,17 @@ defmodule Bonfire.Ghost.Sync.Tiers do
 
   # --- Circle --------------------------------------------------------------
 
-  defp ensure_circle(circle_name, display_name, slug, ghost_tier_id) do
+  defp ensure_circle(circle_name, display_name, slug, ghost_tier_id, type) do
     case Circles.get_by_name(circle_name, InstanceScaffold.admin_circle()) do
       {:ok, circle} ->
-        maybe_refresh_circle(circle, display_name, slug, ghost_tier_id)
+        maybe_refresh_circle(circle, display_name, slug, ghost_tier_id, type)
 
       {:error, :not_found} ->
         attrs = %{
           named: %{name: circle_name},
           extra_info: %{
             summary: circle_summary(display_name),
-            info: circle_info(slug, ghost_tier_id, display_name)
+            info: circle_info(slug, ghost_tier_id, display_name, type)
           }
         }
 
@@ -142,11 +142,11 @@ defmodule Bonfire.Ghost.Sync.Tiers do
     end
   end
 
-  defp maybe_refresh_circle(circle, display_name, slug, ghost_tier_id) do
+  defp maybe_refresh_circle(circle, display_name, slug, ghost_tier_id, type) do
     # `Circles.get_by_name` preloads `:named` + `:caretaker` but not `:extra_info`
     circle = Repo.maybe_preload(circle, :extra_info)
     expected_summary = circle_summary(display_name)
-    expected_info = circle_info(slug, ghost_tier_id, display_name)
+    expected_info = circle_info(slug, ghost_tier_id, display_name, type)
 
     current = extra_info(circle)
 
@@ -185,11 +185,12 @@ defmodule Bonfire.Ghost.Sync.Tiers do
   # `Enums.input_to_atoms`, which drops string keys whose atom isn't already
   # registered in the BEAM atom table. Literal atom keys here guarantee they
   # are registered at module load, so the full info map survives the write.
-  defp circle_info(slug, ghost_tier_id, display_name) do
+  defp circle_info(slug, ghost_tier_id, display_name, type) do
     %{
       ghost_tier_slug: slug,
       ghost_tier_id: ghost_tier_id,
-      display_name: display_name
+      display_name: display_name,
+      ghost_tier_type: type
     }
   end
 
