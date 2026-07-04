@@ -80,4 +80,22 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
       _ -> "badge-ghost"
     end
   end
+
+  @doc "Returns true when the legacy primary-tag-to-topic matcher applies to the configured destination."
+  def show_topic_matching_toggle? do
+    case Bonfire.Common.Settings.get([:bonfire_ghost, :post_into_group], nil, :instance) do
+      id when is_binary(id) and id != "" ->
+        destination_group?(id)
+
+      _ ->
+        false
+    end
+  end
+
+  defp destination_group?(id) do
+    case Bonfire.Classify.Categories.get(id, skip_boundary_check: true) do
+      {:ok, %{type: type}} when type in [nil, :group, "group"] -> true
+      _ -> false
+    end
+  end
 end

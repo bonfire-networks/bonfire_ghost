@@ -56,6 +56,95 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
     end
   end
 
+  describe "auto_import_tag filter" do
+    setup do
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+
+      Process.put([:bonfire_ghost, :auto_import_as], author.id)
+      Process.put([:bonfire_ghost, :auto_import_tag], "politik")
+
+      {:ok, author: author}
+    end
+
+    test "imports matching Ghost tags into the configured topic id even when names differ", %{
+      author: author
+    } do
+      group = group!(author)
+      topic = topic!(author, group, %{name: "Politik Jacobin"})
+
+      Process.put([:bonfire_ghost, :post_into_group], topic.id)
+
+      tagged =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "politik"})
+
+      assert {:ok, post} = EmbedHelper.import_article(tagged, [])
+
+      assert topic.character.username != "politik"
+
+      assert Bonfire.Social.FeedLoader.feed_contains?(:user_activities, post,
+               by: topic,
+               current_user: author
+             )
+    end
+
+    test "skips non-matching Ghost tags without creating a post" do
+      tagged =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "culture"})
+
+      assert {:ok, :filtered_out} = EmbedHelper.import_article(tagged, [])
+      assert {:error, _} = Bonfire.Federate.ActivityPub.Peered.get_by_uri(tagged["url"])
+    end
+
+    test "matches secondary Ghost tags" do
+      tagged =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "culture"})
+        |> Map.put("tags", [%{"slug" => "culture"}, %{"slug" => "politik"}])
+
+      assert {:ok, post} = EmbedHelper.import_article(tagged, [])
+      assert post.id
+    end
+
+    test "fails closed when the configured tag filter has an invalid shape" do
+      Process.put([:bonfire_ghost, :auto_import_tag], %{slug: "politik"})
+
+      tagged =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "politik"})
+
+      assert {:error, {:invalid_auto_import_tag_filter, %{slug: "politik"}}} =
+               EmbedHelper.import_article(tagged, [])
+
+      assert {:error, _} = Bonfire.Federate.ActivityPub.Peered.get_by_uri(tagged["url"])
+    end
+
+    test "hides an existing imported post when an edit no longer matches the tag filter" do
+      viewer = Fake.fake_user!()
+
+      matching =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "politik"})
+
+      non_matching =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "culture"})
+
+      assert {:ok, post} = EmbedHelper.import_article(matching, [])
+      assert Bonfire.Social.FeedLoader.feed_contains?(:local, post, viewer)
+
+      assert {:ok, :filtered_out} = EmbedHelper.import_article(non_matching, [])
+      refute Bonfire.Social.FeedLoader.feed_contains?(:local, post, viewer)
+
+      assert {:ok, _} =
+               Bonfire.Posts.read(post.id,
+                 skip_boundary_check: true,
+                 schema: Bonfire.Common.Types.object_type(post)
+               )
+    end
+  end
+
   describe "hide_article/2" do
     test "is a no-op when no post exists for the URL" do
       assert {:ok, :not_found} = EmbedHelper.hide_article("https://blog.test/missing/")

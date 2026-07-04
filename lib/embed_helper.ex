@@ -19,7 +19,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   `url` is the article's page URL (already known from embed params — used as dedup key via Peered).
   `slug_or_id` is the Ghost canonical slug or `"id:<ghost_id>"`.
 
-  Returns `{:ok, post}` on success, `{:error, reason}` otherwise.
+  Returns `{:ok, post}` on success, or `{:error, reason}` otherwise.
 
   Opts:
     - `current_user` — user to attribute the post to (required)
@@ -51,19 +51,31 @@ defmodule Bonfire.Ghost.EmbedHelper do
   updated (and un-hidden, in case it was previously unpublished); otherwise a
   new post is created. Author is resolved via the shared fallback chain (see
   `get_or_create_post_for_article/3`).
+
+  Returns `{:ok, post}` on success, `{:ok, :filtered_out}` when a configured Ghost tag filter intentionally skips the article, or `{:error, reason}` otherwise.
   """
   def import_article(article, opts \\ []) do
     url = e(article, "url", nil)
 
-    case url && Peered.get_by_uri(url) do
-      {:ok, %{id: existing_id}} ->
-        info(existing_id, "found an existing post for article — updating")
-        # un-hide in case it had been unpublished before
-        maybe_unhide(existing_id)
-        update_post_from_article(existing_id, article, opts)
+    case check_auto_import_tag_filter(article, opts) do
+      :ok ->
+        case url && Peered.get_by_uri(url) do
+          {:ok, %{id: existing_id}} ->
+            info(existing_id, "found an existing post for article — updating")
+            # un-hide in case it had been unpublished before
+            maybe_unhide(existing_id)
+            update_post_from_article(existing_id, article, opts)
 
-      _ ->
-        create_post_from_article(article, url, opts)
+          _ ->
+            create_post_from_article(article, url, opts)
+        end
+
+      {:error, :filtered_out} ->
+        hide_article(url)
+        {:ok, :filtered_out}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -96,6 +108,76 @@ defmodule Bonfire.Ghost.EmbedHelper do
     Bonfire.Boundaries.Blocks.unblock(post_id, :hide, :instance_wide)
   rescue
     e -> warn(e, "Could not un-hide previously hidden Ghost post")
+  end
+
+  defp check_auto_import_tag_filter(article, opts) do
+    opts
+    |> Keyword.get(:auto_import_tag, configured_auto_import_tag())
+    |> normalize_tag_filters()
+    |> case do
+      {:ok, []} ->
+        :ok
+
+      {:ok, filters} ->
+        tags = article_tag_slugs(article)
+
+        if Enum.any?(tags, &(&1 in filters)) do
+          :ok
+        else
+          info(%{filters: filters, tags: tags}, "Ghost article skipped by tag filter")
+          {:error, :filtered_out}
+        end
+
+      {:error, reason} ->
+        warn(reason, "Invalid Ghost auto-import tag filter")
+        {:error, reason}
+    end
+  end
+
+  defp normalize_tag_filters(nil), do: {:ok, []}
+  defp normalize_tag_filters(""), do: {:ok, []}
+
+  defp normalize_tag_filters(filters) when is_binary(filters) do
+    parsed =
+      filters
+      |> String.split([",", " "], trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&String.downcase/1)
+
+    {:ok, parsed}
+  end
+
+  defp normalize_tag_filters(filters) when is_list(filters) do
+    filters
+    |> Enum.reduce_while({:ok, []}, fn filter, {:ok, acc} ->
+      case normalize_tag_filters(filter) do
+        {:ok, parsed} -> {:cont, {:ok, acc ++ parsed}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, parsed} -> {:ok, Enum.uniq(parsed)}
+      error -> error
+    end
+  end
+
+  defp normalize_tag_filters(filter), do: {:error, {:invalid_auto_import_tag_filter, filter}}
+
+  defp article_tag_slugs(article) do
+    primary = e(article, "primary_tag", "slug", nil)
+
+    tags =
+      case e(article, "tags", []) do
+        tags when is_list(tags) -> Enum.map(tags, &e(&1, "slug", nil))
+        _ -> []
+      end
+
+    [primary | tags]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&(String.trim(&1) |> String.downcase()))
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
   end
 
   # Shared create path used by both the on-demand embed flow and webhook import.
@@ -360,6 +442,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
       id when is_binary(id) and id != "" -> id
       _ -> nil
     end
+  end
+
+  defp configured_auto_import_tag do
+    Config.get([:bonfire_ghost, :auto_import_tag], nil)
   end
 
   # When enabled, only import articles whose primary tag maps to a Bonfire topic

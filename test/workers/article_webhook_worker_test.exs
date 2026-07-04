@@ -15,7 +15,7 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
   # and network-free: no resolvable `primary_author`/`primary_tag`, so author
   # resolution falls through to the configured default user and no Ghost API is hit.
   defp article(opts \\ []) do
-    %{
+    article = %{
       "id" => Keyword.get(opts, :id, "ghost_post_1"),
       "slug" => Keyword.get(opts, :slug, "hello-world"),
       "url" => Keyword.get(opts, :url, "https://blog.test/hello-world/"),
@@ -25,6 +25,11 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
       "visibility" => Keyword.get(opts, :visibility, "public"),
       "published_at" => Keyword.get(opts, :published_at, "2024-01-15T10:00:00.000Z")
     }
+
+    case Keyword.get(opts, :tag) do
+      tag when is_binary(tag) -> Map.put(article, "primary_tag", %{"slug" => tag})
+      _ -> article
+    end
   end
 
   defp job(event, post), do: %Oban.Job{args: %{"event" => event, "post" => post}}
@@ -127,6 +132,37 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
                by: topic,
                current_user: author
              )
+    end
+
+    test "auto-import tag filters Ghost eligibility while topic id controls placement", %{
+      author: author
+    } do
+      group = group!(author)
+      topic = topic!(author, group)
+
+      Process.put([:bonfire_ghost, :auto_import_tag], "politik")
+      Process.put([:bonfire_ghost, :post_into_group], topic.id)
+
+      assert {:ok, post} = run("post.published", article(tag: "politik"))
+      assert topic.character.username != "politik"
+
+      assert FeedLoader.feed_contains?(:user_activities, post,
+               by: topic,
+               current_user: author
+             )
+    end
+
+    test "auto-import skips posts that do not match the configured Ghost tag" do
+      Process.put([:bonfire_ghost, :auto_import_tag], "politik")
+
+      assert {:ok, :filtered_out} =
+               run(
+                 "post.published",
+                 article(tag: "culture", url: "https://blog.test/culture/")
+               )
+
+      assert {:error, _} =
+               Peered.get_by_uri("https://blog.test/culture/")
     end
   end
 

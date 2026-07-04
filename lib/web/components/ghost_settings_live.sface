@@ -179,17 +179,27 @@ GHOST_ADMIN_API_KEY=id:secret  # Optional, for members</pre>
             />
           </form>
 
-          {#if Bonfire.Common.Settings.get([:bonfire_ghost, :post_into_group], nil, :instance) not in [
-              nil,
-              ""
-            ]}
+          <form phx-submit="Bonfire.Common.Settings:save">
+            <Bonfire.UI.Common.SettingsInputLive
+              keys={[:bonfire_ghost, :auto_import_tag]}
+              scope={:instance}
+              name={l("Only auto-import Ghost tag")}
+              description={l(
+                "Optional. Ghost tag slug(s) to auto-import, separated by commas or spaces. When set, webhook auto-import skips posts without one of these tags. The destination remains the group/topic above."
+              )}
+              placeholder="politik"
+              class="input input-bordered input-sm flex-1"
+            />
+          </form>
+
+          {#if Bonfire.Ghost.Web.GhostSettingsLive.show_topic_matching_toggle?()}
             <form phx-change="Bonfire.Common.Settings:set">
               <Bonfire.UI.Common.SettingsToggleLive
                 keys={[:bonfire_ghost, :require_topic]}
                 scope={:instance}
                 name={l("Only import articles matching a topic")}
                 description={l(
-                  "When enabled, only import articles whose primary tag maps to a topic within the group above. Articles that don't match a topic are skipped."
+                  "When the destination above is a group, only import articles whose primary Ghost tag maps to a topic inside that group. If the destination is already a topic id, use the Ghost tag filter above instead."
                 )}
               />
             </form>
