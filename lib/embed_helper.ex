@@ -244,8 +244,29 @@ defmodule Bonfire.Ghost.EmbedHelper do
              }
            }),
          {:ok, post} <- read_imported(post_id, author) do
+      # A content edit doesn't (re)apply topic routing, so re-apply the (idempotent) auto-boost
+      # in case the article was first imported before `post_into_group`/tag perms were in place.
+      maybe_route_into_context(author, article, post, opts)
       {:ok, post}
     end
+  end
+
+  # Resolves the target context and (idempotently) boosts the post into its feed, ensuring tag
+  # permission first. Best-effort: never fails the update.
+  defp maybe_route_into_context(author, article, post, opts) do
+    group_id = Keyword.get(opts, :group_id) || configured_default_group()
+
+    with {context_type, context} when context_type in [:topic, :group] and not is_nil(context) <-
+           resolve_context(group_id, article) do
+      ensure_author_can_post(author, context, group_id)
+      Bonfire.Social.Tags.maybe_auto_boost(author, context, post)
+    else
+      _ -> :ok
+    end
+  rescue
+    e ->
+      warn(e, "Could not route re-published Ghost article into its topic feed")
+      :ok
   end
 
   defp read_imported(post_id, author) do
@@ -327,6 +348,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
   # (a failure to join is warned, not fatal, the post is still created).
   defp ensure_author_can_post(_author, nil, _group_id), do: :ok
 
+  # TODO: joining a *group* grants `:tag` (its members circle gets `:contribute`), but joining a
+  # *topic* grants nothing (a topic never wires its own members circle into its ACL), so the
+  # explicit grant below is needed. Cleaner fix would be at the source in bonfire_classify — have
+  # topics grant their own members circle `:contribute` — so "join → can participate" holds uniformly.
   defp ensure_author_can_post(author, context, group_id) do
     target = group_id || Enums.id(context)
 
@@ -336,8 +361,34 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
       other ->
         warn(other, "Could not add import author to group/topic — post may not reach its feed")
-        :ok
     end
+
+    # Membership alone can't tag a *topic* (grant goes to the parent group's members circle, not the
+    # topic's own — see `init_boundaries`), so the auto-boost silently no-ops. Grant `:contribute`
+    # (includes `:tag`) directly. Idempotent; no-op once the author already has tag permission.
+    #
+    # On `context`, not `target`: a group `target` can resolve to a child topic, and the boost needs
+    # `:tag` on that topic — `can?(:tag, target)` could pass via group membership while it can't.
+    maybe_grant_tag_permission(author, Enums.id(context) || target)
+
+    :ok
+  end
+
+  defp maybe_grant_tag_permission(author, object) do
+    if Bonfire.Boundaries.can?(author, :tag, object) do
+      :ok
+    else
+      Bonfire.Boundaries.Controlleds.grant_role(author, object, :contribute,
+        current_user: author,
+        skip_boundary_check: true
+      )
+
+      :ok
+    end
+  rescue
+    e ->
+      warn(e, "Could not grant :contribute to import author — post may not reach the topic feed")
+      :ok
   end
 
   defp resolve_context(group_id, article) when is_binary(group_id) do
