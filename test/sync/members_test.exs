@@ -39,23 +39,62 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
   defp setup_tiers(tiers), do: Tiers.sync_tiers(tiers, [])
 
-  describe "provision_from_ghost_member/1 — new member" do
-    test "creates an account + user for a never-seen email" do
+  describe "provision_from_ghost_member/1 — new member (account-only by default)" do
+    test "creates an ACCOUNT with NO user — members pick their own handle later" do
       setup_tiers([@tier_free])
 
-      assert {:ok, user} = Members.provision_from_ghost_member(member("new@test.local"))
-      assert user.id
+      assert {:ok, account} = Members.provision_from_ghost_member(member("new@test.local"))
+      assert %Bonfire.Data.Identity.Account{} = account
 
+      # the account exists but no user/username was auto-derived from Ghost
       assert %{} = account = Accounts.get_by_email("new@test.local")
+      assert Users.by_account!(account) == []
+    end
+
+    test "with create_user: true creates account + user (article-author path)" do
+      setup_tiers([@tier_free])
+
+      assert {:ok, user} =
+               Members.provision_from_ghost_member(member("author@test.local"), create_user: true)
+
+      assert user.id
+      assert user.character.username
+
+      account = Accounts.get_by_email("author@test.local")
       assert [%{id: id} | _] = Users.by_account!(account)
       assert id == user.id
     end
 
-    test "adds the user to the circles matching the ghost tiers" do
+    test "reconciles tier circles for ALL profiles when the account already has users" do
+      setup_tiers([@tier_paid])
+
+      # an account with two profiles
+      {:ok, u1} =
+        Members.provision_from_ghost_member(member("multi@test.local"), create_user: true)
+
+      account = Accounts.get_by_email("multi@test.local")
+
+      {:ok, u2} =
+        Users.create(
+          %{profile: %{name: "Second"}, character: %{username: "multi_second_x"}},
+          account
+        )
+
+      # an account-only sync/webhook granting the paid tier
+      assert {:ok, _account} =
+               Members.provision_from_ghost_member(member("multi@test.local", tiers: [@tier_paid]))
+
+      assert Circles.is_encircled_by?(u1, tier_circle("paid"))
+      assert Circles.is_encircled_by?(u2, tier_circle("paid"))
+    end
+
+    test "adds the user to the circles matching the ghost tiers (author/full path)" do
       setup_tiers([@tier_free, @tier_paid])
 
       {:ok, user} =
-        Members.provision_from_ghost_member(member("tiered@test.local", tiers: [@tier_free]))
+        Members.provision_from_ghost_member(member("tiered@test.local", tiers: [@tier_free]),
+          create_user: true
+        )
 
       circle_ids =
         InstanceScaffold.admin_circle()
@@ -72,7 +111,8 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       {:ok, user} =
         Members.provision_from_ghost_member(
-          member("partial@test.local", tiers: [@tier_free, unsynced])
+          member("partial@test.local", tiers: [@tier_free, unsynced]),
+          create_user: true
         )
 
       circle_ids =
@@ -90,20 +130,23 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       setup_tiers([@tier_free])
       m = member("repeat@test.local", tiers: [@tier_free])
 
-      {:ok, user_a} = Members.provision_from_ghost_member(m)
-      {:ok, user_b} = Members.provision_from_ghost_member(m)
+      {:ok, account_a} = Members.provision_from_ghost_member(m)
+      {:ok, account_b} = Members.provision_from_ghost_member(m)
 
-      assert user_a.id == user_b.id
+      assert account_a.id == account_b.id
     end
   end
 
-  describe "provision_from_ghost_member/1 — handle priority" do
+  # only the AUTHOR path (create_user: true) derives a username; regular members
+  # pick their own handle via /create-user
+  describe "provision_from_ghost_member/1 — handle priority (author path)" do
     test "uses slug as first-choice username when present" do
       setup_tiers([])
 
       {:ok, user} =
         Members.provision_from_ghost_member(
-          member("slug@test.local", slug: "myslug", name: "My Name")
+          member("slug@test.local", slug: "myslug", name: "My Name"),
+          create_user: true
         )
 
       assert user.character.username == "myslug"
@@ -113,7 +156,9 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       setup_tiers([])
 
       {:ok, user} =
-        Members.provision_from_ghost_member(member("noname@test.local", name: "Jane Doe"))
+        Members.provision_from_ghost_member(member("noname@test.local", name: "Jane Doe"),
+          create_user: true
+        )
 
       assert user.character.username == "JaneDoe"
     end
@@ -124,7 +169,8 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       {:ok, user} =
         Members.provision_from_ghost_member(
-          member("fallback@test.local", slug: "takenslug", name: "Jane Doe")
+          member("fallback@test.local", slug: "takenslug", name: "Jane Doe"),
+          create_user: true
         )
 
       assert user.character.username == "JaneDoe"
@@ -137,7 +183,8 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       {:ok, user} =
         Members.provision_from_ghost_member(
-          member("collision@test.local", slug: "takenslug", name: "Takenname")
+          member("collision@test.local", slug: "takenslug", name: "Takenname"),
+          create_user: true
         )
 
       username = user.character.username
@@ -162,7 +209,9 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       setup_tiers([@tier_free, @tier_paid])
 
       {:ok, user} =
-        Members.provision_from_ghost_member(member("switch@test.local", tiers: [@tier_free]))
+        Members.provision_from_ghost_member(member("switch@test.local", tiers: [@tier_free]),
+          create_user: true
+        )
 
       {:ok, diff} =
         Members.reconcile_circles(user, member("switch@test.local", tiers: [@tier_paid]))
@@ -184,7 +233,8 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       {:ok, user} =
         Members.provision_from_ghost_member(
-          member("drop@test.local", tiers: [@tier_free, @tier_paid])
+          member("drop@test.local", tiers: [@tier_free, @tier_paid]),
+          create_user: true
         )
 
       {:ok, diff} = Members.reconcile_circles(user, member("drop@test.local", tiers: []))
@@ -207,7 +257,8 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       {:ok, user} =
         Members.provision_from_ghost_member(
-          member("bye@test.local", tiers: [@tier_free, @tier_paid])
+          member("bye@test.local", tiers: [@tier_free, @tier_paid]),
+          create_user: true
         )
 
       assert {:ok, %{removed: 2}} = Members.remove_member(%{"email" => "bye@test.local"})
@@ -226,10 +277,35 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       assert {:ok, %{removed: 0}} =
                Members.remove_member(%{"email" => "nobody@test.local"})
     end
+
+    test "removes tier circles from ALL profiles on the account" do
+      setup_tiers([@tier_paid])
+
+      {:ok, u1} =
+        Members.provision_from_ghost_member(member("multirem@test.local", tiers: [@tier_paid]),
+          create_user: true
+        )
+
+      account = Accounts.get_by_email("multirem@test.local")
+
+      {:ok, u2} =
+        Users.create(
+          %{profile: %{name: "Second"}, character: %{username: "multirem_second_x"}},
+          account
+        )
+
+      # grant u2 the tier too (account-only reconcile hits all profiles)
+      {:ok, _} = Members.provision_from_ghost_member(member("multirem@test.local", tiers: [@tier_paid]))
+      assert Circles.is_encircled_by?(u2, tier_circle("paid"))
+
+      assert {:ok, %{removed: 2}} = Members.remove_member(%{"email" => "multirem@test.local"})
+      refute Circles.is_encircled_by?(u1, tier_circle("paid"))
+      refute Circles.is_encircled_by?(u2, tier_circle("paid"))
+    end
   end
 
-  describe "sync_all/1 backfill" do
-    test "provisions all paginated Ghost members into their tier circles" do
+  describe "sync_all/1 backfill (account-only)" do
+    test "provisions all paginated Ghost members into ACCOUNTS (no user/circles yet)" do
       setup_tiers([@tier_free, @tier_paid])
 
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
@@ -258,25 +334,21 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       assert {:ok, %{provisioned: 2, errors: []}} = Members.sync_all()
 
-      free_user =
-        "free-backfill@test.local"
-        |> Accounts.get_by_email()
-        |> Users.by_account!()
-        |> hd()
-
-      paid_user =
-        "paid-backfill@test.local"
-        |> Accounts.get_by_email()
-        |> Users.by_account!()
-        |> hd()
-
-      assert Circles.is_encircled_by?(free_user, tier_circle("free"))
-      refute Circles.is_encircled_by?(free_user, tier_circle("paid"))
-      assert Circles.is_encircled_by?(paid_user, tier_circle("paid"))
+      # accounts exist for both members …
+      assert %{} = free_account = Accounts.get_by_email("free-backfill@test.local")
+      assert %{} = Accounts.get_by_email("paid-backfill@test.local")
+      # … but no user/username/circle is auto-derived (that happens at /create-user)
+      assert Users.by_account!(free_account) == []
     end
 
-    test "resolves tier circles once for the whole run when tiers are passed in" do
+    test "member with an existing user still gets their circles reconciled by the backfill" do
       setup_tiers([@tier_free, @tier_paid])
+
+      # a member who already created their Bonfire profile before this backfill run
+      {:ok, existing} =
+        Members.provision_from_ghost_member(member("existing@test.local", tiers: []),
+          create_user: true
+        )
 
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
 
@@ -284,31 +356,16 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
         {:ok,
          %{
            "members" => [
-             member("batch-free@test.local", tiers: [@tier_free]),
-             member("batch-paid@test.local", tiers: [@tier_paid])
+             member("existing@test.local", tiers: [@tier_paid])
            ],
            "meta" => %{"pagination" => %{"page" => 1, "next" => nil}}
          }}
       end)
 
-      assert {:ok, %{provisioned: 2, errors: []}} =
+      assert {:ok, %{provisioned: 1, errors: []}} =
                Members.sync_all(tiers: [@tier_free, @tier_paid])
 
-      free_user =
-        "batch-free@test.local"
-        |> Accounts.get_by_email()
-        |> Users.by_account!()
-        |> hd()
-
-      paid_user =
-        "batch-paid@test.local"
-        |> Accounts.get_by_email()
-        |> Users.by_account!()
-        |> hd()
-
-      assert Circles.is_encircled_by?(free_user, tier_circle("free"))
-      assert Circles.is_encircled_by?(paid_user, tier_circle("paid"))
-      refute Circles.is_encircled_by?(paid_user, tier_circle("free"))
+      assert Circles.is_encircled_by?(existing, tier_circle("paid"))
     end
 
     test "uses a fresh Admin API client for each page" do

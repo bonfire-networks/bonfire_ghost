@@ -508,7 +508,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp fetch_and_provision_staff(ghost_id) do
     with {:ok, c} <- Ghost.admin_client(),
          {:ok, ghost_staff} <- AdminAPI.get_user(c, ghost_id),
-         {:ok, user} <- Bonfire.Ghost.Sync.Members.provision_from_ghost_member(ghost_staff) do
+         # authors need a full identity to be attributed as a poster, so eagerly
+         # create the user (regular members instead go through /create-user)
+         {:ok, user} <-
+           Bonfire.Ghost.Sync.Members.provision_from_ghost_member(ghost_staff, create_user: true) do
       user
     else
       other ->

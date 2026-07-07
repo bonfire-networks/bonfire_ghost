@@ -57,19 +57,39 @@ defmodule Bonfire.Ghost.Sync.Members do
   end
 
   @doc """
-  Creates or updates a local Account/User from a Ghost member payload and
-  syncs their ghost-tier circle memberships.
+  Provisions a local identity from a Ghost member payload.
+
+  By default (regular members) this creates the **Account only** (email +
+  passwordless credential) and does NOT derive a `@username` from the member's
+  Stripe/Ghost real name — the member picks their own handle via Bonfire's own
+  `/create-user` step (with the usual consent acknowledgements), and their
+  `ghost_tier:*` circles are attached at that point (see the after-signup hook).
+  Returns `{:ok, account}`.
+
+  Pass `create_user: true` (used only by the article-AUTHOR path,
+  `Bonfire.Ghost.EmbedHelper`) to eagerly create the Account **and** User (with
+  a derived username + profile) and reconcile circles immediately, returning
+  `{:ok, user}` — an author needs a full identity to be attributed as a poster.
+
+  If the account already has user(s) (e.g. a member re-logging in after creating
+  their profile, or a webhook for an existing member), their tier circles are
+  reconciled even on the account-only path.
   """
   @spec provision_from_ghost_member(map(), keyword()) ::
-          {:ok, Bonfire.Data.Identity.User.t()} | {:error, term()}
+          {:ok, Bonfire.Data.Identity.User.t() | Bonfire.Data.Identity.Account.t()}
+          | {:error, term()}
   def provision_from_ghost_member(ghost_member, opts \\ [])
 
   def provision_from_ghost_member(%{"email" => email} = ghost_member, opts)
       when is_binary(email) and email != "" do
-    with {:ok, new?, account} <- ensure_account(email),
-         {:ok, user} <- ensure_user(account, ghost_member, new?),
-         {:ok, _diff} <- reconcile_circles(user, ghost_member, opts) do
-      {:ok, user}
+    if Keyword.get(opts, :create_user, false) do
+      with {:ok, new?, account} <- ensure_account(email),
+           {:ok, user} <- ensure_user(account, ghost_member, new?),
+           {:ok, _diff} <- reconcile_circles(user, ghost_member, opts) do
+        {:ok, user}
+      end
+    else
+      provision_account_only(ghost_member, email, opts)
     end
   end
 
@@ -78,16 +98,34 @@ defmodule Bonfire.Ghost.Sync.Members do
     {:error, :missing_email}
   end
 
+  # Account-only: no auto-username. Reconcile circles only if a user already exists.
+  defp provision_account_only(ghost_member, email, opts) do
+    with {:ok, _new?, account} <- ensure_account(email) do
+      case Users.by_account!(account) do
+        [] -> :ok
+        users -> Enum.each(users, &reconcile_circles(&1, ghost_member, opts))
+      end
+
+      {:ok, account}
+    end
+  end
+
   @doc """
   Handles `member.deleted` — removes the user from all `ghost_tier:*` circles.
-  The Bonfire Account and User are preserved.
+  The Bonfire Account and User(s) are preserved.
   """
   @spec remove_member(map()) :: {:ok, %{removed: non_neg_integer()}} | {:error, term()}
   def remove_member(%{"email" => email}) when is_binary(email) and email != "" do
     with account when not is_nil(account) <- Accounts.get_by_email(email),
-         [user | _] <- Users.by_account!(account) do
-      circle_ids = Enum.map(current_ghost_circles(user), & &1.id)
-      {:ok, removed} = do_remove(user, circle_ids)
+         [_ | _] = users <- Users.by_account!(account) do
+      # a Ghost membership is keyed by email→account, so remove the tier circles
+      # from ALL of the account's profiles (mirrors the add side in provisioning)
+      removed =
+        Enum.reduce(users, 0, fn user, acc ->
+          {:ok, n} = do_remove(user, Enum.map(current_ghost_circles(user), & &1.id))
+          acc + n
+        end)
+
       {:ok, %{removed: removed}}
     else
       nil ->
