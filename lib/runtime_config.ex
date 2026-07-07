@@ -54,6 +54,16 @@ defmodule Bonfire.Ghost.RuntimeConfig do
     # Drive the login page toggle through bonfire_ui_me's own setting so
     # the UI extension never needs to know about Ghost.
     config :bonfire_ui_me, :login, passwordless_only: truthy?(gated_mode)
+
+    # When a Ghost-provisioned member finishes creating their profile via /create-user,
+    # attach their `ghost_tier:*` circles (they're provisioned account-only at login, so
+    # circles can't be set until the user exists — see `Members.reconcile_on_signup/1`).
+    # Registered as a signup hook; other extensions append to this list at runtime.
+    # Must be under the `:bonfire_me` app (the OTP app of the `Bonfire.Me.Users` key), since
+    # `Users.after_creation` reads `Config.get([Bonfire.Me.Users, :after_signup_hooks])`,
+    # which resolves the module to its extension app.
+    config :bonfire_me, Bonfire.Me.Users,
+      after_signup_hooks: [{Bonfire.Ghost.Sync.Members, :reconcile_on_signup, []}]
   end
 
   defp maybe_add(opts, _key, nil), do: opts

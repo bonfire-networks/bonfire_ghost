@@ -20,6 +20,8 @@ defmodule Bonfire.Ghost.Sync.Members do
   """
 
   import Untangle
+  use Bonfire.Common.E
+  use Bonfire.Common.Settings
 
   alias Bonfire.Boundaries.Circles
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
@@ -98,9 +100,51 @@ defmodule Bonfire.Ghost.Sync.Members do
     {:error, :missing_email}
   end
 
+  @doc """
+  `after_signup_hooks` callback — runs when ANY user finishes creating their profile.
+
+  For a Ghost-provisioned account (one that went through the account-only login flow,
+  marked by the stashed `[:bonfire_ghost, :member]` setting), fetches the member's
+  current tiers live from Ghost and attaches the matching `ghost_tier:*` circles to the
+  freshly-created user. No-op (and no Ghost API call) for non-Ghost accounts.
+  """
+  def reconcile_on_signup(user) do
+    user = Bonfire.Common.Repo.maybe_preload(user, accounted: [account: :settings])
+    account = e(user, :accounted, :account, nil)
+    email = account_email(account)
+
+    with true <- ghost_provisioned?(account),
+         email when is_binary(email) and email != "" <- email,
+         {:ok, c} <- Ghost.admin_client(),
+         {:ok, %{"members" => [member | _]}} <-
+           AdminAPI.get_member_by_email(c, email, include: "tiers") do
+      reconcile_circles(user, member)
+    end
+
+    :ok
+  rescue
+    e ->
+      warn(e, "Ghost after-signup circle reconcile failed")
+      :ok
+  end
+
+  # An account is Ghost-provisioned iff we stashed the member context on it at login.
+  defp ghost_provisioned?(account) do
+    not is_nil(Settings.get([:bonfire_ghost, :member], nil, current_account: account))
+  end
+
+  defp account_email(account) do
+    e(account, :email, :email_address, nil) ||
+      account
+      |> Bonfire.Common.Repo.maybe_preload(:email)
+      |> e(:email, :email_address, nil)
+  end
+
   # Account-only: no auto-username. Reconcile circles only if a user already exists.
   defp provision_account_only(ghost_member, email, opts) do
     with {:ok, _new?, account} <- ensure_account(email) do
+      stash_member_context(account, ghost_member)
+
       case Users.by_account!(account) do
         [] -> :ok
         users -> Enum.each(users, &reconcile_circles(&1, ghost_member, opts))
@@ -108,6 +152,37 @@ defmodule Bonfire.Ghost.Sync.Members do
 
       {:ok, account}
     end
+  end
+
+  # Remember the member's Ghost display name on the account, so the `/create-user` step
+  # can prefill the display name. Its presence also marks the account as Ghost-provisioned,
+  # which the after-signup hook uses to know whether to look up + attach `ghost_tier:*`
+  # circles (tiers are fetched live from Ghost at profile-creation time — Settings drops
+  # unregistered keys like a stashed tier list, and live is always current anyway).
+  defp stash_member_context(account, ghost_member) do
+    name = ghost_member["name"]
+
+    Settings.put(
+      [:bonfire_ghost, :member],
+      %{name: name},
+      scope: :account,
+      current_account: account,
+      skip_boundary_check: true
+    )
+
+    # Also expose the display name via the generic account setting the `/create-user`
+    # step prefills from (keeps bonfire_ui_me Ghost-agnostic). Editable there.
+    if is_binary(name) and name != "" do
+      Settings.put(
+        [Bonfire.Me.Users, :suggested_profile_name],
+        name,
+        scope: :account,
+        current_account: account,
+        skip_boundary_check: true
+      )
+    end
+  rescue
+    e -> warn(e, "Could not stash Ghost member context on account")
   end
 
   @doc """

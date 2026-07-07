@@ -3,6 +3,8 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
   # (shared state) and provisions global Accounts.
   use Bonfire.Ghost.DataCase, async: false
   use Repatch.ExUnit
+  use Bonfire.Common.Settings
+  use Bonfire.Common.E
 
   alias Bonfire.Boundaries.Circles
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
@@ -65,6 +67,24 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       assert id == user.id
     end
 
+    test "stashes the member's display name on the account (for /create-user prefill)" do
+      setup_tiers([@tier_paid])
+
+      {:ok, _account} =
+        Members.provision_from_ghost_member(
+          member("stash@test.local", name: "Real Name", tiers: [@tier_paid])
+        )
+
+      account =
+        Accounts.get_by_email("stash@test.local")
+        |> Bonfire.Common.Repo.maybe_preload(:settings)
+
+      stashed =
+        Bonfire.Common.Settings.get([:bonfire_ghost, :member], nil, current_account: account)
+
+      assert e(stashed, :name, nil) == "Real Name"
+    end
+
     test "reconciles tier circles for ALL profiles when the account already has users" do
       setup_tiers([@tier_paid])
 
@@ -82,7 +102,9 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       # an account-only sync/webhook granting the paid tier
       assert {:ok, _account} =
-               Members.provision_from_ghost_member(member("multi@test.local", tiers: [@tier_paid]))
+               Members.provision_from_ghost_member(
+                 member("multi@test.local", tiers: [@tier_paid])
+               )
 
       assert Circles.is_encircled_by?(u1, tier_circle("paid"))
       assert Circles.is_encircled_by?(u2, tier_circle("paid"))
@@ -204,6 +226,66 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
     end
   end
 
+  describe "reconcile_on_signup/1 — circles attached at profile creation" do
+    test "attaches ghost_tier circles to a newly-created profile of a Ghost account" do
+      setup_tiers([@tier_paid])
+
+      {:ok, account} =
+        Members.provision_from_ghost_member(
+          member("hook@test.local", name: "Hooky", tiers: [@tier_paid])
+        )
+
+      {:ok, user} =
+        Users.create(
+          %{profile: %{name: "Hooky"}, character: %{username: "hook_user_zz"}},
+          account
+        )
+
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      Repatch.patch(AdminAPI, :get_member_by_email, fn :client, "hook@test.local", _opts ->
+        {:ok, %{"members" => [member("hook@test.local", tiers: [@tier_paid])]}}
+      end)
+
+      assert :ok = Members.reconcile_on_signup(user)
+      assert Circles.is_encircled_by?(user, tier_circle("paid"))
+    end
+
+    test "is a no-op for a non-Ghost account (no marker → no Ghost call, no circles)" do
+      setup_tiers([@tier_paid])
+      user = Fake.fake_user!()
+
+      assert :ok = Members.reconcile_on_signup(user)
+      refute Circles.is_encircled_by?(user, tier_circle("paid"))
+    end
+
+    test "registered after_signup hook fires on a real Users.create and attaches tier circles" do
+      # End-to-end: a Ghost member provisioned account-only picks their handle via the normal
+      # profile-creation path; the after_signup_hooks entry (registered in runtime_config.ex)
+      # must fire and attach their ghost_tier circles — no direct reconcile_on_signup call here.
+      setup_tiers([@tier_paid])
+
+      {:ok, account} =
+        Members.provision_from_ghost_member(
+          member("e2e@test.local", name: "E2E Member", tiers: [@tier_paid])
+        )
+
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      Repatch.patch(AdminAPI, :get_member_by_email, fn :client, "e2e@test.local", _opts ->
+        {:ok, %{"members" => [member("e2e@test.local", tiers: [@tier_paid])]}}
+      end)
+
+      {:ok, user} =
+        Users.create(
+          %{profile: %{name: "Chosen Name"}, character: %{username: "e2e_chosen_zz"}},
+          account
+        )
+
+      assert Circles.is_encircled_by?(user, tier_circle("paid"))
+    end
+  end
+
   describe "reconcile_circles/2 — tier changes" do
     test "moving a member from one tier to another adds the new and removes the old" do
       setup_tiers([@tier_free, @tier_paid])
@@ -295,7 +377,9 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
         )
 
       # grant u2 the tier too (account-only reconcile hits all profiles)
-      {:ok, _} = Members.provision_from_ghost_member(member("multirem@test.local", tiers: [@tier_paid]))
+      {:ok, _} =
+        Members.provision_from_ghost_member(member("multirem@test.local", tiers: [@tier_paid]))
+
       assert Circles.is_encircled_by?(u2, tier_circle("paid"))
 
       assert {:ok, %{removed: 2}} = Members.remove_member(%{"email" => "multirem@test.local"})
