@@ -56,6 +56,102 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
     end
   end
 
+  describe "import_article/2 access updates" do
+    setup do
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      Process.put([:bonfire_ghost, :auto_import_as], author.id)
+
+      Bonfire.Ghost.Sync.Tiers.sync_tiers(
+        [
+          %{"id" => "t_gold", "slug" => "gold", "name" => "Gold", "type" => "paid"},
+          %{"id" => "t_silver", "slug" => "silver", "name" => "Silver", "type" => "paid"}
+        ],
+        []
+      )
+
+      :ok
+    end
+
+    defp tier_circle!(slug) do
+      {:ok, circle} =
+        Bonfire.Boundaries.Circles.get_by_name(
+          "ghost_tier:#{slug}",
+          Bonfire.Boundaries.Scaffold.Instance.admin_circle()
+        )
+
+      circle
+    end
+
+    test "updates an existing public article when Ghost changes it to a paid tier" do
+      outsider = Fake.fake_user!()
+      member = Fake.fake_user!()
+      Bonfire.Boundaries.Circles.add_to_circles(member, tier_circle!("gold"))
+
+      assert {:ok, post} = EmbedHelper.import_article(article())
+      assert Bonfire.Boundaries.can?(outsider, :read, post)
+
+      paid_article =
+        Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "gold"}]})
+      assert {:ok, updated} = EmbedHelper.import_article(paid_article)
+
+      assert updated.id == post.id
+      refute Bonfire.Boundaries.can?(outsider, :read, updated)
+      assert Bonfire.Boundaries.can?(member, :read, updated)
+    end
+
+    test "updates an existing paid article when Ghost changes it back to public" do
+      outsider = Fake.fake_user!()
+
+      paid_article =
+        Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "gold"}]})
+
+      assert {:ok, post} = EmbedHelper.import_article(paid_article)
+      refute Bonfire.Boundaries.can?(outsider, :read, post)
+
+      assert {:ok, updated} = EmbedHelper.import_article(article())
+
+      assert updated.id == post.id
+      assert Bonfire.Boundaries.can?(outsider, :read, updated)
+    end
+
+    test "updates an existing paid article when Ghost changes it to members-only" do
+      reader = Fake.fake_user!()
+
+      paid_article =
+        Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "gold"}]})
+
+      assert {:ok, post} = EmbedHelper.import_article(paid_article)
+      refute Bonfire.Boundaries.can?(reader, :read, post)
+
+      members_article = Map.put(article(), "visibility", "members")
+      assert {:ok, updated} = EmbedHelper.import_article(members_article)
+
+      assert updated.id == post.id
+      assert Bonfire.Boundaries.can?(reader, :read, updated)
+    end
+
+    test "removes stale Ghost tier grants when the allowed tier changes" do
+      gold_member = Fake.fake_user!()
+      silver_member = Fake.fake_user!()
+      Bonfire.Boundaries.Circles.add_to_circles(gold_member, tier_circle!("gold"))
+      Bonfire.Boundaries.Circles.add_to_circles(silver_member, tier_circle!("silver"))
+
+      gold_article =
+        Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "gold"}]})
+      assert {:ok, post} = EmbedHelper.import_article(gold_article)
+      assert Bonfire.Boundaries.can?(gold_member, :read, post)
+      refute Bonfire.Boundaries.can?(silver_member, :read, post)
+
+      silver_article =
+        Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "silver"}]})
+
+      assert {:ok, updated} = EmbedHelper.import_article(silver_article)
+
+      refute Bonfire.Boundaries.can?(gold_member, :read, updated)
+      assert Bonfire.Boundaries.can?(silver_member, :read, updated)
+    end
+  end
+
   describe "auto_import_tag filter" do
     setup do
       author = Fake.fake_user!(%{}, %{username: "ghostbot"})
@@ -142,6 +238,25 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
                  skip_boundary_check: true,
                  schema: Bonfire.Common.Types.object_type(post)
                )
+    end
+
+    test "on_filtered: :skip leaves an existing non-matching post visible (backfill semantics)" do
+      viewer = Fake.fake_user!()
+
+      matching =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "politik"})
+
+      non_matching =
+        article()
+        |> Map.put("primary_tag", %{"slug" => "culture"})
+
+      assert {:ok, post} = EmbedHelper.import_article(matching, [])
+      assert Bonfire.Social.FeedLoader.feed_contains?(:local, post, viewer)
+
+      # A bulk backfill must NOT retroactively hide posts that don't match the filter.
+      assert {:ok, :filtered_out} = EmbedHelper.import_article(non_matching, on_filtered: :skip)
+      assert Bonfire.Social.FeedLoader.feed_contains?(:local, post, viewer)
     end
   end
 
@@ -562,6 +677,43 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
                by: topic,
                current_user: creator
              )
+    end
+  end
+
+  describe "Bonfire.Ghost.post_into_group/0" do
+    test "returns the configured group id, or nil when unset or blank" do
+      assert Bonfire.Ghost.post_into_group() == nil
+
+      Process.put([:bonfire_ghost, :post_into_group], "01GROUPIDXXXXXXXXXXXXXXXXX")
+      assert Bonfire.Ghost.post_into_group() == "01GROUPIDXXXXXXXXXXXXXXXXX"
+
+      Process.put([:bonfire_ghost, :post_into_group], "")
+      assert Bonfire.Ghost.post_into_group() == nil
+    end
+  end
+
+  describe "Bonfire.Ghost.imported_articles_count/1" do
+    test "counts imported articles by their canonical URL prefix" do
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      Process.put([:bonfire_ghost, :auto_import_as], author.id)
+
+      assert {:ok, _} =
+               EmbedHelper.import_article(%{article() | "url" => "https://blog.test/one/", "id" => "gp1"})
+
+      assert {:ok, _} =
+               EmbedHelper.import_article(%{article() | "url" => "https://blog.test/two/", "id" => "gp2"})
+
+      assert Bonfire.Ghost.imported_articles_count("https://blog.test") == 2
+      # trailing slash on the passed URL must not change the result
+      assert Bonfire.Ghost.imported_articles_count("https://blog.test/") == 2
+      # a different domain matches nothing
+      assert Bonfire.Ghost.imported_articles_count("https://other.test") == 0
+    end
+
+    test "returns nil when no blog URL is available" do
+      # No arg and no configured GHOST_URL → nothing to match on.
+      Process.put([:bonfire_ghost, :ghost_url], "")
+      assert Bonfire.Ghost.imported_articles_count(nil) == nil
     end
   end
 end

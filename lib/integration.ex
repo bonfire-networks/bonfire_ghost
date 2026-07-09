@@ -43,6 +43,50 @@ defmodule Bonfire.Ghost do
     Config.get([:bonfire_ghost, :ghost_url])
   end
 
+  @doc """
+  The group/topic id (or @username) that imported articles are posted into, or nil.
+
+  Read via `Config.get` (the app-env), not `Settings.get(:instance)`: the `:bonfire_ghost`
+  instance branch can contain non-atom keys, which breaks `Settings.get`'s keyword-path
+  lookup — see `Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?/0`.
+  """
+  def post_into_group do
+    case Config.get([:bonfire_ghost, :post_into_group], nil) do
+      id when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Counts articles imported from the Ghost blog at `blog_url`.
+
+  Imported articles store their Ghost page URL as the `canonical_uri` on a `Peered` row, so we count the rows whose `canonical_uri` starts with the blog URL. Pass the blog's public site URL (the Ghost Content API `settings.url`, which is what article URLs actually use) — falling back to the configured `GHOST_URL` when unknown. Returns an integer, or `nil` when no usable URL is available.
+
+  Note: `canonical_uri` is unindexed, so this is a table scan; fine for this admin-only settings page, but add an index (or revive a peer-based count) if it ever runs hot.
+  """
+  def imported_articles_count(blog_url \\ nil) do
+    case blog_url || ghost_url() do
+      url when is_binary(url) and url != "" ->
+        count_peered_by_uri_prefix(String.trim_trailing(url, "/") <> "/")
+
+      _ ->
+        nil
+    end
+  end
+
+  defp count_peered_by_uri_prefix(prefix) do
+    import Ecto.Query
+
+    Bonfire.Common.Repo.one(
+      from(p in Bonfire.Data.ActivityPub.Peered,
+        where: like(p.canonical_uri, ^(prefix <> "%")),
+        select: count(p.id)
+      )
+    ) || 0
+  rescue
+    _ -> nil
+  end
+
   @doc "Returns the configured Ghost Content API key, or nil if not configured."
   def api_key do
     Config.get([:bonfire_ghost, :content_api_key])

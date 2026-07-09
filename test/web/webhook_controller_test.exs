@@ -53,6 +53,13 @@ defmodule Bonfire.Ghost.Web.WebhookControllerTest do
     )
   end
 
+  test "post.edited enqueues an ArticleWebhookWorker job and returns 200" do
+    conn = call("post.edited", %{"post" => article_payload()})
+
+    assert conn.status == 200
+    assert_enqueued(worker: ArticleWebhookWorker, args: %{"event" => "post.edited"})
+  end
+
   test "does not enqueue (but still acks 200) when auto-import is disabled" do
     Settings.put([:bonfire_ghost, :auto_import_articles], false,
       scope: :instance,

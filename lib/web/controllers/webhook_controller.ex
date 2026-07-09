@@ -58,6 +58,9 @@ defmodule Bonfire.Ghost.Web.WebhookController do
   def webhook(conn, %{"event" => "post.published.edited"} = params),
     do: enqueue_post(conn, "post.published.edited", params, "current")
 
+  def webhook(conn, %{"event" => "post.edited"} = params),
+    do: enqueue_post(conn, "post.edited", params, "current")
+
   def webhook(conn, %{"event" => "post.unpublished"} = params),
     do: enqueue_post(conn, "post.unpublished", params, "current")
 

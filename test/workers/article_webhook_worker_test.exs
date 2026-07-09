@@ -185,6 +185,49 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorkerTest do
     end
   end
 
+  describe "post.edited" do
+    setup do
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      enable_auto_import!(author)
+      :ok
+    end
+
+    test "treats a published edit event as an upsert" do
+      assert {:ok, post} = run("post.published", article(title: "Original"))
+
+      edited =
+        article(title: "Edited through post.edited")
+        |> Map.put("status", "published")
+
+      assert {:ok, updated} = run("post.edited", edited)
+
+      assert updated.id == post.id
+      reloaded = read_imported!(post)
+      assert reloaded.post_content.name == "Edited through post.edited"
+    end
+
+    test "does not import an explicit draft edit" do
+      draft =
+        article(title: "Draft")
+        |> Map.put("status", "draft")
+        |> Map.put("url", "https://blog.test/draft/")
+
+      assert {:cancel, :not_published} = run("post.edited", draft)
+      refute match?({:ok, _}, Peered.get_by_uri("https://blog.test/draft/"))
+    end
+
+    test "fails closed: an edit with no status is not imported" do
+      # A slimmed/unexpected payload without a status must not publish a draft.
+      no_status =
+        article(title: "No status")
+        |> Map.delete("status")
+        |> Map.put("url", "https://blog.test/no-status/")
+
+      assert {:cancel, :not_published} = run("post.edited", no_status)
+      refute match?({:ok, _}, Peered.get_by_uri("https://blog.test/no-status/"))
+    end
+  end
+
   describe "post.unpublished / post.deleted — hide, never delete" do
     setup do
       author = Fake.fake_user!(%{}, %{username: "ghostbot"})

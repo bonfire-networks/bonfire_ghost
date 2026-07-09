@@ -208,6 +208,49 @@ defmodule Bonfire.Ghost.AdminAPI do
   end
 
   @doc """
+  Lists posts via the Admin API.
+
+  Unlike the Content API, the Admin endpoint returns the full `html` body for **gated** (members/paid) posts too — but only when `formats: "html"` is requested (the Admin API defaults to lexical/mobiledoc). Used by the historical article backfill so imported gated articles aren't truncated.
+
+  ## Options
+
+    * `:limit`   - posts per page (default: 50)
+    * `:page`    - page number
+    * `:formats` - content formats to include (default: "html")
+    * `:include` - related data (default: "tags,authors")
+    * `:filter`  - Ghost filter string (e.g. "status:published") — the Admin API
+      returns drafts/scheduled posts too unless filtered
+
+  ## Examples
+
+      iex> Bonfire.Ghost.AdminAPI.list_posts(client, page: 1, filter: "status:published")
+      {:ok, %{"posts" => [...], "meta" => %{...}}}
+  """
+  def list_posts(client, opts \\ []) do
+    params =
+      [
+        limit: Keyword.get(opts, :limit, 50),
+        formats: Keyword.get(opts, :formats, "html"),
+        include: Keyword.get(opts, :include, "tags,authors")
+      ]
+      |> maybe_add_param(:page, opts)
+      |> maybe_add_param(:filter, opts)
+
+    case Req.get(client, url: "/posts/", params: params) do
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        {:ok, body}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        error(body, "Ghost Admin API error (status #{status})")
+        {:error, {:api_error, status, body}}
+
+      {:error, reason} ->
+        error(reason, "Ghost Admin API request failed")
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Lists newsletters configured on the Ghost site.
 
   ## Examples

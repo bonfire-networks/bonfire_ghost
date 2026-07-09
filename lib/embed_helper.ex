@@ -12,6 +12,9 @@ defmodule Bonfire.Ghost.EmbedHelper do
   alias Bonfire.Ghost.API
   alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Federate.ActivityPub.Peered
+  alias Bonfire.Boundaries.Acls
+  alias Bonfire.Boundaries.Controlleds
+  alias Bonfire.Boundaries.Grants
 
   @doc """
   Finds or creates a Bonfire Post for a Ghost article.
@@ -53,6 +56,9 @@ defmodule Bonfire.Ghost.EmbedHelper do
   `get_or_create_post_for_article/3`).
 
   Returns `{:ok, post}` on success, `{:ok, :filtered_out}` when a configured Ghost tag filter intentionally skips the article, or `{:error, reason}` otherwise.
+
+  Opts:
+    - `on_filtered` — what to do when the tag filter rejects the article: `:hide` (default) hides any existing post instance-wide, which is the webhook "the article no longer qualifies, retract it" semantics; `:skip` leaves existing posts untouched (used by the historical backfill, which sweeps every article and must not retroactively hide posts created via other paths).
   """
   def import_article(article, opts \\ []) do
     url = e(article, "url", nil)
@@ -71,7 +77,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
         end
 
       {:error, :filtered_out} ->
-        hide_article(url)
+        if Keyword.get(opts, :on_filtered, :hide) == :hide, do: hide_article(url)
         {:ok, :filtered_out}
 
       {:error, reason} ->
@@ -190,19 +196,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
          {context_type, context} <- resolve_context(group_id, article),
          :ok <- check_topic_requirement(require_topic?, context_type),
          :ok <- ensure_author_can_post(author, context, group_id),
-         # Only PAID tiers gate `:read` — a free tier is open signup, not a paywall
-         # (see `article_boundary/2`). So tier circles are granted `:read` only when
-         # the article is actually paid-gated.
-         read_circles = (requires_paid?(article) && tier_circles_for_article(article)) || [],
-         to_circles =
-           ((context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || []) ++
-             read_circles,
-         boundary =
-           boundary_opt ||
-             article_boundary(article, context) ||
-             (context &&
-                Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
-             "public",
+         %{boundary: boundary, to_circles: to_circles} <-
+           article_boundary_attrs(article, context, boundary_opt),
          context_id = (context && Enums.id(context)) || nil,
          published = e(article, "published_at", nil),
          post_id = (published && DatesTimes.generate_ulid_if_past(published)) || nil,
@@ -243,12 +238,107 @@ defmodule Bonfire.Ghost.EmbedHelper do
                html_body: article["html"] || ""
              }
            }),
-         {:ok, post} <- read_imported(post_id, author) do
+         {:ok, post} <- read_imported(post_id, author),
+         :ok <- update_article_boundaries(author, article, post, opts) do
       # A content edit doesn't (re)apply topic routing, so re-apply the (idempotent) auto-boost
       # in case the article was first imported before `post_into_group`/tag perms were in place.
       maybe_route_into_context(author, article, post, opts)
       {:ok, post}
     end
+  end
+
+  defp update_article_boundaries(author, article, post, opts) do
+    group_id = Keyword.get(opts, :group_id) || configured_default_group()
+    boundary_opt = Keyword.get(opts, :boundary, nil)
+
+    with {_, context} <- resolve_context(group_id, article),
+         :ok <- ensure_author_can_post(author, context, group_id),
+         %{boundary: boundary, to_circles: to_circles} <-
+           article_boundary_attrs(article, context, boundary_opt),
+         set_opts =
+           [
+             boundary: boundary,
+             to_circles: to_circles,
+             context_id: (context && Enums.id(context)) || nil
+           ] do
+      # Strip-then-replace the post's read ACLs atomically: if applying the new
+      # boundaries fails or raises, the removals roll back — the post is never left
+      # with no read ACLs (which would make it invisible to everyone, including its
+      # own audience) until a later retry happens to succeed.
+      Bonfire.Common.Repo.transact_with(fn ->
+        with :ok <- remove_old_article_preset_acls(post),
+             :ok <- remove_old_ghost_tier_grants(post),
+             {:ok, :granted} <- Bonfire.Boundaries.set_boundaries(author, post, set_opts) do
+          {:ok, :granted}
+        end
+      end)
+      |> case do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp article_boundary_attrs(article, context, boundary_opt) do
+    # Only PAID tiers gate `:read`; a free tier is open signup, not a paywall.
+    read_circles = (requires_paid?(article) && tier_circles_for_article(article)) || []
+
+    %{
+      boundary:
+        boundary_opt ||
+          article_boundary(article, context) ||
+          (context && Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
+          "public",
+      to_circles:
+        ((context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || []) ++
+          read_circles
+    }
+  end
+
+  defp remove_old_ghost_tier_grants(post) do
+    ghost_tier_subject_ids = Enum.map(all_ghost_tier_circles(), & &1.id)
+
+    custom_acl_ids =
+      post
+      |> Controlleds.list_on_object(skip_boundary_check: true)
+      |> Enum.filter(&object_custom_acl?/1)
+      |> Enum.map(&(e(&1, :acl_id, nil) || e(&1, :acl, :id, nil)))
+      |> Enum.reject(&is_nil/1)
+
+    if ghost_tier_subject_ids != [] and custom_acl_ids != [] do
+      Enum.each(ghost_tier_subject_ids, &Grants.remove_subject_from_acl(&1, custom_acl_ids))
+    end
+
+    :ok
+  end
+
+  defp remove_old_article_preset_acls(post) do
+    article_preset_acl_ids = article_preset_acl_ids()
+
+    preset_acl_ids =
+      post
+      |> Controlleds.list_acls_on_object(skip_boundary_check: true)
+      |> Enum.map(&(e(&1, :acl_id, nil) || e(&1, :acl, :id, nil)))
+      |> Enum.filter(&(&1 in article_preset_acl_ids))
+
+    if preset_acl_ids != [] do
+      Controlleds.remove_acls(post, preset_acl_ids)
+    end
+
+    :ok
+  end
+
+  defp article_preset_acl_ids do
+    Config.get!(:preset_acls_match)
+    |> Map.values()
+    |> List.flatten()
+    |> Enum.uniq()
+    |> Enum.map(&Acls.get_id!/1)
+  end
+
+  defp object_custom_acl?(controlled) do
+    e(controlled, :acl, :stereotyped, :stereotype_id, nil) ==
+      Bonfire.Boundaries.Scaffold.Instance.custom_acl()
   end
 
   # Resolves the target context and (idempotently) boosts the post into its feed, ensuring tag

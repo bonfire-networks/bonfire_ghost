@@ -62,7 +62,7 @@ defmodule Bonfire.Ghost.Sync.TiersTest do
       {:ok, circle} = lookup("paid")
       circle = Bonfire.Common.Repo.maybe_preload(circle, :extra_info)
 
-      assert circle.extra_info.info["type"] == "paid"
+      assert circle.extra_info.info["ghost_tier_type"] == "paid"
     end
   end
 

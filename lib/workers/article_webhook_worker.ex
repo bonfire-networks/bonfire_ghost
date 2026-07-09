@@ -13,12 +13,12 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorker do
   Args shape:
 
       %{
-        "event" => "post.published" | "post.published.edited"
+        "event" => "post.published" | "post.published.edited" | "post.edited"
                  | "post.unpublished" | "post.deleted",
         "post" => %{...}   # the Ghost article object (post.current / post.previous)
       }
 
-  `post.published`/`post.published.edited` upsert the post; `post.unpublished`/
+  `post.published`/`post.published.edited`/published `post.edited` upsert the post; `post.unpublished`/
   `post.deleted` **hide** it instance-wide (never delete) so any attached thread
   is preserved — see `Bonfire.Ghost.EmbedHelper`.
   """
@@ -26,10 +26,9 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorker do
   use Oban.Worker, queue: :ghost_webhooks, max_attempts: 5
 
   import Untangle
+  use Bonfire.Common.Config
 
   alias Bonfire.Ghost.EmbedHelper
-  alias Bonfire.Common.Settings
-  require Bonfire.Common.Settings
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"event" => event, "post" => post}}) do
@@ -50,16 +49,19 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorker do
 
   @doc "Whether Ghost article auto-import is enabled for this instance (opt-in)."
   def auto_import_enabled? do
-    Settings.get([:bonfire_ghost, :auto_import_articles], false, :instance) in [
-      true,
-      "true",
-      "1",
-      "yes"
-    ]
+    Config.get([:bonfire_ghost, :auto_import_articles], false) in [true, "true", "1", "yes"]
   end
 
   defp dispatch(event, post) when event in ["post.published", "post.published.edited"],
     do: EmbedHelper.import_article(post, [])
+
+  defp dispatch("post.edited", post) do
+    if published?(post) do
+      EmbedHelper.import_article(post, [])
+    else
+      {:cancel, :not_published}
+    end
+  end
 
   defp dispatch(event, post) when event in ["post.unpublished", "post.deleted"],
     do: EmbedHelper.hide_article(post, [])
@@ -68,4 +70,7 @@ defmodule Bonfire.Ghost.Workers.ArticleWebhookWorker do
     warn(event, "ArticleWebhookWorker: unknown event — cancelling job")
     {:cancel, {:unknown_event, event}}
   end
+
+  defp published?(%{"status" => status}) when is_binary(status), do: status == "published"
+  defp published?(_), do: false
 end

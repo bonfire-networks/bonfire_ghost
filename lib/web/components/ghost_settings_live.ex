@@ -2,10 +2,13 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   @moduledoc """
   Settings component for the Ghost extension.
 
-  Displays:
-  - Connected Ghost blog details (title, URL, version, etc.)
-  - Membership tiers with a "Sync tiers" action
-  - Table of members/subscribers
+  Organised as a persistent status band plus grouped sections (heavy/rare ones collapsed by default, via Alpine `x-collapse`):
+  - Status band: connection, blog title/version/URL, member & tier vitals, Refresh
+  - Article import (open): author, group/topic, tag filters, auto-import + webhooks
+  - Access & login (open): gated login + external signup URL
+  - Membership tiers (open when present): flat rows + "Sync tiers" action
+  - Members (collapsed): subscriber table + "Sync members" action
+  - Blog details (collapsed): language, timezone, cover, members/paid flags
 
   Event handling lives in `Bonfire.Ghost.LiveHandler` per Bonfire convention.
   """
@@ -27,6 +30,11 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   data syncing, :boolean, default: false
   data last_sync, :any, default: nil
   data error, :any, default: nil
+  data gated_login, :boolean, default: false
+  data show_topic_matching, :boolean, default: false
+  data auto_import, :boolean, default: false
+  data articles_count, :any, default: nil
+  data topic_matching_group, :any, default: :__unset__
 
   def update(assigns, socket) do
     socket = assign(socket, assigns)
@@ -40,20 +48,69 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
         socket
       end
 
-    {:ok, socket}
+    # These cheap in-memory reads are recomputed on every update so the UI reflects a
+    # just-changed setting live. (`show_topic_matching` needs a DB query, so it's handled
+    # separately below to avoid running that query on every re-render.)
+    {:ok,
+     socket
+     |> assign(
+       gated_login: gated_login?(),
+       # Normalized boolean (the stored value can be the string "true"), so the toggle's
+       # `checked` comparison and the webhook block agree. Reuses the canonical predicate.
+       auto_import: Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?()
+     )
+     |> assign_show_topic_matching()}
   end
 
-  def format_date(nil), do: "-"
+  # `show_topic_matching_toggle?/0` runs a DB query (destination_group?/1), so only re-run
+  # it when the underlying `post_into_group` setting actually changes — a cheap Config read
+  # gates the query, keeping it both live and off the per-render hot path.
+  defp assign_show_topic_matching(socket) do
+    group = Bonfire.Ghost.post_into_group()
 
-  def format_date(iso_string) when is_binary(iso_string) do
-    case DateTime.from_iso8601(iso_string) do
-      {:ok, datetime, _offset} ->
-        Calendar.strftime(datetime, "%Y-%m-%d")
-
-      _ ->
-        iso_string
+    if group == Map.get(socket.assigns, :topic_matching_group, :__unset__) do
+      socket
+    else
+      socket
+      |> assign(:topic_matching_group, group)
+      |> assign(:show_topic_matching, show_topic_matching_toggle?())
     end
   end
+
+  @doc "Whether gated login (Ghost-members-only, passwordless) is enabled instance-wide."
+  def gated_login? do
+    Bonfire.Common.Settings.get([:bonfire_ui_me, :login, :passwordless_only], false, :instance) in [
+      true,
+      "true",
+      "1",
+      "yes"
+    ]
+  end
+
+  # Presentational adapter over the locale-aware shared formatter. Normalizes to a
+  # DateTime first (via to_date_time/1) so full ISO datetime strings work too — Ghost
+  # returns member `created_at` as e.g. "2026-01-15T10:00:00.000Z", which the shared
+  # format_date/to_date path (Date.from_iso8601) rejects. Falls back to "-".
+  def format_date(nil), do: "-"
+
+  def format_date(date) do
+    case Bonfire.Common.DatesTimes.to_date_time(date) do
+      %DateTime{} = dt -> Bonfire.Common.DatesTimes.format_date(dt) || "-"
+      _ -> "-"
+    end
+  end
+
+  # Locale-aware thousands grouping (6309 → "6,309"), with a plain-integer fallback.
+  def format_count(n) when is_integer(n) do
+    case Bonfire.Common.Utils.maybe_apply(Bonfire.Common.Localise.Cldr.Number, :to_string, [n],
+           fallback_return: nil
+         ) do
+      {:ok, formatted} -> formatted
+      _ -> Integer.to_string(n)
+    end
+  end
+
+  def format_count(other), do: to_string(other)
 
   def format_price(nil, _currency), do: "-"
 
@@ -83,12 +140,9 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
 
   @doc "Returns true when the legacy primary-tag-to-topic matcher applies to the configured destination."
   def show_topic_matching_toggle? do
-    case Bonfire.Common.Settings.get([:bonfire_ghost, :post_into_group], nil, :instance) do
-      id when is_binary(id) and id != "" ->
-        destination_group?(id)
-
-      _ ->
-        false
+    case Bonfire.Ghost.post_into_group() do
+      id when is_binary(id) -> destination_group?(id)
+      _ -> false
     end
   end
 

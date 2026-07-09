@@ -14,6 +14,7 @@ defmodule Bonfire.Ghost.LiveHandler do
   alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Sync
   alias Bonfire.Ghost.Workers.MemberSyncWorker
+  alias Bonfire.Ghost.Workers.ArticleSyncWorker
 
   # Ghost API include lists — keep in sync with what the settings page renders.
   @members_include "labels,newsletters"
@@ -42,6 +43,14 @@ defmodule Bonfire.Ghost.LiveHandler do
   end
 
   def handle_event("sync_tiers", _params, socket) do
+    if not can_configure_instance?(socket) do
+      {:noreply, assign_flash(socket, :error, unauthorized_message())}
+    else
+      do_sync_tiers(socket)
+    end
+  end
+
+  defp do_sync_tiers(socket) do
     opts = [
       current_user: current_user(socket),
       current_account: current_account(socket)
@@ -76,6 +85,9 @@ defmodule Bonfire.Ghost.LiveHandler do
 
   def handle_event("sync_members", _params, socket) do
     cond do
+      not can_configure_instance?(socket) ->
+        {:noreply, assign_flash(socket, :error, unauthorized_message())}
+
       not Ghost.admin_configured?() ->
         {:noreply, assign_flash(socket, :error, l("Ghost Admin API is not configured"))}
 
@@ -101,6 +113,48 @@ defmodule Bonfire.Ghost.LiveHandler do
         end
     end
   end
+
+  def handle_event("sync_articles", _params, socket) do
+    cond do
+      not can_configure_instance?(socket) ->
+        {:noreply, assign_flash(socket, :error, unauthorized_message())}
+
+      not Ghost.configured?() ->
+        {:noreply, assign_flash(socket, :error, l("Ghost is not configured"))}
+
+      true ->
+        case ArticleSyncWorker.new(%{}) |> Oban.insert() do
+          {:ok, _job} ->
+            {:noreply,
+             assign_flash(
+               socket,
+               :info,
+               l(
+                 "Article backfill started. Existing published Ghost articles will be imported in the background, honoring your author, group, and tag settings."
+               )
+             )}
+
+          {:error, reason} ->
+            {:noreply,
+             assign_flash(
+               socket,
+               :error,
+               l("Article backfill could not be started: %{reason}", reason: inspect(reason))
+             )}
+        end
+    end
+  end
+
+  # These sync actions enqueue instance-wide work (imports, boundary rewrites, member
+  # provisioning), so gate them on the same permission the settings write path enforces
+  # (`can?(current_account, :configure, :instance)` in Bonfire.Common.Settings) — the
+  # `Bonfire.Ghost:*` events are otherwise routable from any connected LiveView.
+  defp can_configure_instance?(socket) do
+    Bonfire.Boundaries.can?(current_user(socket), :configure, :instance)
+  end
+
+  defp unauthorized_message,
+    do: l("You do not have permission to manage this instance's Ghost integration.")
 
   @doc """
   Loads Ghost settings, tiers, and members into the socket in one pass.
@@ -138,10 +192,18 @@ defmodule Bonfire.Ghost.LiveHandler do
       )
       |> Map.new(fn {:ok, {key, result}} -> {key, result} end)
 
+    socket =
+      socket
+      |> apply_settings(results.settings)
+      |> apply_tiers(results.tiers)
+      |> apply_members(results.members)
+
+    # Count imported articles by their canonical URL prefix — use the blog's public
+    # site URL (what article URLs actually use), falling back to the configured GHOST_URL.
+    blog_url = (is_map(socket.assigns[:settings]) && socket.assigns.settings["url"]) || nil
+
     socket
-    |> apply_settings(results.settings)
-    |> apply_tiers(results.tiers)
-    |> apply_members(results.members)
+    |> assign(:articles_count, Ghost.imported_articles_count(blog_url))
     |> assign(:loading, false)
   end
 
