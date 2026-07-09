@@ -254,6 +254,18 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
 
           {#if @gated_login}
             <form phx-submit="Bonfire.Common.Settings:save">
+              <Bonfire.UI.Common.SettingsTextareaLive
+                keys={[:bonfire_ui_me, :login, :gated_login_message]}
+                scope={:instance}
+                name={l("Login page message")}
+                description={l("Optional. Shown above the login form, to explain who can sign in (e.g. what kind of account is needed).")}
+                placeholder={l("To join %{instance}, you need a Club or Comrade account.",
+                  instance: Bonfire.Application.name()
+                )}
+              />
+            </form>
+
+            <form phx-submit="Bonfire.Common.Settings:save">
               <Bonfire.UI.Common.SettingsInputLive
                 keys={[:bonfire_ui_me, :login, :external_signup_url]}
                 scope={:instance}
