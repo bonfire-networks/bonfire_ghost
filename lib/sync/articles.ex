@@ -41,9 +41,14 @@ defmodule Bonfire.Ghost.Sync.Articles do
   @spec sync_all(keyword()) :: {:ok, sync_summary()} | {:error, term()}
   def sync_all(opts \\ []) do
     cond do
-      Ghost.admin_configured?() -> paginate_and_import(&fetch_admin_page/1, 1, @empty_summary, opts)
-      Ghost.configured?() -> paginate_and_import(&fetch_content_page/1, 1, @empty_summary, opts)
-      true -> {:error, :not_configured}
+      Ghost.admin_configured?() ->
+        paginate_and_import(&fetch_admin_page/1, 1, @empty_summary, opts)
+
+      Ghost.configured?() ->
+        paginate_and_import(&fetch_content_page/1, 1, @empty_summary, opts)
+
+      true ->
+        {:error, :not_configured}
     end
   end
 

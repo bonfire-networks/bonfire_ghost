@@ -124,7 +124,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               keys={[:bonfire_ghost, :auto_import_as]}
               scope={:instance}
               name={l("Default author")}
-              description={l("User ID that imported articles are attributed to when the Ghost author has no matching local user.")}
+              description={l(
+                "User ID that imported articles are attributed to when the Ghost author has no matching local user."
+              )}
               placeholder="user ID"
               class="input input-bordered input-sm flex-1"
             />
@@ -138,7 +140,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               keys={[:bonfire_ghost, :post_into_group]}
               scope={:instance}
               name={l("Post into group or topic")}
-              description={l("Optional. ID or @username of a group/topic imported articles are posted into. An embed's data-group-id parameter overrides this.")}
+              description={l(
+                "Optional. ID or @username of a group/topic imported articles are posted into. An embed's data-group-id parameter overrides this."
+              )}
               placeholder="group ID or @username"
               class="input input-bordered input-sm flex-1"
             />
@@ -149,7 +153,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               keys={[:bonfire_ghost, :auto_import_tag]}
               scope={:instance}
               name={l("Only auto-import these Ghost tags")}
-              description={l("Optional. Tag slug(s), comma- or space-separated. Auto-import skips posts without one of these tags.")}
+              description={l(
+                "Optional. Tag slug(s), comma- or space-separated. Auto-import skips posts without one of these tags."
+              )}
               placeholder="politik"
               class="input input-bordered input-sm flex-1"
             />
@@ -161,7 +167,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 keys={[:bonfire_ghost, :require_topic]}
                 scope={:instance}
                 name={l("Only import articles matching a topic")}
-                description={l("When the destination is a group, only import articles whose primary Ghost tag maps to a topic inside it.")}
+                description={l(
+                  "When the destination is a group, only import articles whose primary Ghost tag maps to a topic inside it."
+                )}
               />
             </form>
           {/if}
@@ -174,7 +182,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               scope={:instance}
               current_value={@auto_import}
               name={l("Auto-import on publish")}
-              description={l("Automatically mirror each published Ghost article as a post here (and update/hide it on edit/unpublish). Requires the webhooks below.")}
+              description={l(
+                "Automatically mirror each published Ghost article as a post here (and update/hide it on edit/unpublish). Requires the webhooks below."
+              )}
             />
           </form>
 
@@ -194,7 +204,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 </span>
               </button>
               <div x-show="expanded" x-collapse x-cloak class="px-3 pb-3 text-sm text-muted">
-                <p>{l("Add these in Ghost admin → Settings → Integrations, using GHOST_WEBHOOK_SECRET as the secret on each:")}</p>
+                <p>{l(
+                    "Add these in Ghost admin → Settings → Integrations, using GHOST_WEBHOOK_SECRET as the secret on each:"
+                  )}</p>
                 <ul class="mt-2 space-y-1 font-mono text-xs">
                   <li>{l("Post published")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published</span></li>
                   <li>{l("Published post updated")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published.edited</span></li>
@@ -248,7 +260,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               keys={[:bonfire_ui_me, :login, :passwordless_only]}
               scope={:instance}
               name={l("Gated login (Ghost members only)")}
-              description={l("Hide the password and signup forms on the login page. Ghost members get a passwordless email link instead.")}
+              description={l(
+                "Hide the password and signup forms on the login page. Ghost members get a passwordless email link instead."
+              )}
             />
           </form>
 
@@ -258,7 +272,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 keys={[:bonfire_ui_me, :login, :gated_login_message]}
                 scope={:instance}
                 name={l("Login page message")}
-                description={l("Optional. Shown above the login form, to explain who can sign in (e.g. what kind of account is needed).")}
+                description={l(
+                  "Optional. Shown above the login form, to explain who can sign in (e.g. what kind of account is needed)."
+                )}
                 placeholder={l("To join %{instance}, you need a Club or Comrade account.",
                   instance: Bonfire.Application.name()
                 )}
@@ -270,7 +286,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 keys={[:bonfire_ui_me, :login, :external_signup_url]}
                 scope={:instance}
                 name={l("External signup URL")}
-                description={l("Optional. Shows a Sign up button next to login that redirects here (e.g. your Ghost subscribe page).")}
+                description={l(
+                  "Optional. Shows a Sign up button next to login that redirects here (e.g. your Ghost subscribe page)."
+                )}
                 placeholder="https://your-blog.ghost.io/#/portal/signup"
                 class="input input-bordered input-sm flex-1"
               />
@@ -309,9 +327,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               phx-click="Bonfire.Ghost:sync_tiers"
               phx-target={@myself}
               disabled={@syncing}
-              data-confirm={l(
-                "Sync membership tiers from Ghost? This creates or updates a Bonfire circle for each tier."
-              )}
+              data-confirm={l("Sync membership tiers from Ghost? This creates or updates a Bonfire circle for each tier.")}
             >
               {#if @syncing}
                 <span class="loading loading-spinner loading-xs" />
@@ -326,7 +342,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
 
         <div class="p-4">
           <p class="text-sm text-muted mb-3">
-            {l("Each Ghost tier becomes a Bonfire circle you can grant access to anywhere in the boundaries system.")}
+            {l(
+              "Each Ghost tier becomes a Bonfire circle you can grant access to anywhere in the boundaries system."
+            )}
           </p>
 
           {#if @gated_login}
@@ -367,7 +385,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                         keys={[:bonfire_ghost, :required_tier, tier["slug"]]}
                         scope={:instance}
                         name={l("Required")}
-                        compact={true}
+                        compact
                       />
                     </form>
                   {/if}
@@ -416,7 +434,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
 
         <div x-show="expanded" x-collapse x-cloak class="px-4 pb-4">
           <p class="text-sm text-muted mb-4">
-            {l("Run a one-off backfill after syncing tiers. Webhooks and Ghost sign-in keep future changes in sync.")}
+            {l(
+              "Run a one-off backfill after syncing tiers. Webhooks and Ghost sign-in keep future changes in sync."
+            )}
           </p>
 
           {#if @members == []}

@@ -92,6 +92,7 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
 
       paid_article =
         Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "gold"}]})
+
       assert {:ok, updated} = EmbedHelper.import_article(paid_article)
 
       assert updated.id == post.id
@@ -138,6 +139,7 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
 
       gold_article =
         Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "gold"}]})
+
       assert {:ok, post} = EmbedHelper.import_article(gold_article)
       assert Bonfire.Boundaries.can?(gold_member, :read, post)
       refute Bonfire.Boundaries.can?(silver_member, :read, post)
@@ -698,10 +700,18 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
       Process.put([:bonfire_ghost, :auto_import_as], author.id)
 
       assert {:ok, _} =
-               EmbedHelper.import_article(%{article() | "url" => "https://blog.test/one/", "id" => "gp1"})
+               EmbedHelper.import_article(%{
+                 article()
+                 | "url" => "https://blog.test/one/",
+                   "id" => "gp1"
+               })
 
       assert {:ok, _} =
-               EmbedHelper.import_article(%{article() | "url" => "https://blog.test/two/", "id" => "gp2"})
+               EmbedHelper.import_article(%{
+                 article()
+                 | "url" => "https://blog.test/two/",
+                   "id" => "gp2"
+               })
 
       assert Bonfire.Ghost.imported_articles_count("https://blog.test") == 2
       # trailing slash on the passed URL must not change the result
