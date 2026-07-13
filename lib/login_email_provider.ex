@@ -13,18 +13,26 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   alias Bonfire.Ghost
   alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Sync.Members
+  alias Bonfire.Common.Settings
+  require Bonfire.Common.Settings
   use Bonfire.Common.E
   use Bonfire.Common.Config
 
+  # Shape check only, to keep junk input (this runs on the raw, unvalidated forgot-password field)
+  # from costing a Ghost round-trip. Deliberately permissive: injection is handled by
+  # `AdminAPI.escape_nql_string/1`, and quotes are legal in a local part (o'brien@…).
+  @email_regex ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
   @impl true
   def ensure_account(email) when is_binary(email) and email != "" do
-    with {:ok, c} <- Ghost.admin_client() do
+    with true <- Regex.match?(@email_regex, email) or :no_match,
+         {:ok, c} <- Ghost.admin_client() do
       case AdminAPI.get_member_by_email(c, email, include: "tiers") do
         {:ok, %{"members" => [member | _]}} ->
           if tier_allowed?(member) do
             Members.provision_from_ghost_member(member)
           else
-            maybe_send_registration_hint(email)
+            # no hint email here — the dispatcher already sends one when all providers `:no_match`
             :no_match
           end
 
@@ -40,12 +48,17 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   def ensure_account(_), do: :no_match
 
   defp tier_allowed?(member) do
+    # MUST be `Settings.get(..., :instance)`: `Config.get/3`'s 3rd arg is an **otp_app**, not a
+    # scope, so it would read a non-existent `:instance` app, always return the default, and let
+    # every member through the gate. The settings UI writes these at instance scope.
     required_map =
-      Config.get([:bonfire_ghost, :required_tier], %{}, :instance) || %{}
+      Settings.get([:bonfire_ghost, :required_tier], %{}, :instance) || %{}
 
+    # not `v == true`: the settings toggle can store the string "true" (cf. auto_import_enabled?/0),
+    # which would leave required_slugs empty and again let every member through
     required_slugs =
       required_map
-      |> Enum.filter(fn {_, v} -> v == true end)
+      |> Enum.filter(fn {_, v} -> v in [true, "true", "1", "yes"] end)
       |> Enum.map(fn {k, _} -> to_string(k) end)
 
     if required_slugs == [] do
@@ -60,12 +73,4 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
     end
   end
 
-  defp maybe_send_registration_hint(email) do
-    with url when is_binary(url) and url != "" <-
-           Config.get([:bonfire_ui_me, :login, :external_signup_url]),
-         mailer when not is_nil(mailer) <- Bonfire.Me.Mails.mailer() do
-      Bonfire.Me.Mails.registration_hint(url)
-      |> mailer.send_now(email)
-    end
-  end
 end

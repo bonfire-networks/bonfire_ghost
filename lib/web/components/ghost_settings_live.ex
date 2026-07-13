@@ -35,31 +35,47 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   data auto_import, :boolean, default: false
   data articles_count, :any, default: nil
   data topic_matching_group, :any, default: :__unset__
+  # Fail-closed: only flipped true once the viewer is confirmed to be an instance admin.
+  data authorized, :boolean, default: false
 
   def update(assigns, socket) do
     socket = assign(socket, assigns)
 
-    socket =
-      if not Map.get(socket.assigns, :loaded, false) do
-        socket
-        |> Bonfire.Ghost.LiveHandler.load_ghost_data()
-        |> assign(:loaded, true)
-      else
-        socket
-      end
+    # The Ghost integration exposes member PII, tiers, and instance-wide sync actions.
+    # The dedicated /ghost/settings route is admin-gated, but this is also a
+    # `declare_settings_component` rendered in the general settings UI, so gate it here
+    # too — otherwise any logged-in user opening settings triggers the member fetch.
+    if not authorized?(socket) do
+      {:ok, assign(socket, authorized: false, loading: false)}
+    else
+      socket =
+        if not Map.get(socket.assigns, :loaded, false) do
+          socket
+          |> Bonfire.Ghost.LiveHandler.load_ghost_data()
+          |> assign(:loaded, true)
+        else
+          socket
+        end
 
-    # These cheap in-memory reads are recomputed on every update so the UI reflects a
-    # just-changed setting live. (`show_topic_matching` needs a DB query, so it's handled
-    # separately below to avoid running that query on every re-render.)
-    {:ok,
-     socket
-     |> assign(
-       gated_login: gated_login?(),
-       # Normalized boolean (the stored value can be the string "true"), so the toggle's
-       # `checked` comparison and the webhook block agree. Reuses the canonical predicate.
-       auto_import: Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?()
-     )
-     |> assign_show_topic_matching()}
+      # These cheap in-memory reads are recomputed on every update so the UI reflects a
+      # just-changed setting live. (`show_topic_matching` needs a DB query, so it's handled
+      # separately below to avoid running that query on every re-render.)
+      {:ok,
+       socket
+       |> assign(
+         authorized: true,
+         gated_login: gated_login?(),
+         # Normalized boolean (the stored value can be the string "true"), so the toggle's
+         # `checked` comparison and the webhook block agree. Reuses the canonical predicate.
+         auto_import: Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?()
+       )
+       |> assign_show_topic_matching()}
+    end
+  end
+
+  # Gate on the same permission the settings write path enforces (`can?(:configure, :instance)`).
+  defp authorized?(socket) do
+    Bonfire.Boundaries.can?(current_user(socket), :configure, :instance) == true
   end
 
   # `show_topic_matching_toggle?/0` runs a DB query (destination_group?/1), so only re-run

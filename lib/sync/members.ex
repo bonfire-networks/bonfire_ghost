@@ -87,7 +87,7 @@ defmodule Bonfire.Ghost.Sync.Members do
     if Keyword.get(opts, :create_user, false) do
       with {:ok, new?, account} <- ensure_account(email),
            {:ok, user} <- ensure_user(account, ghost_member, new?),
-           {:ok, _diff} <- reconcile_circles(user, ghost_member, opts) do
+           {:ok, _diff} <- maybe_reconcile_circles(user, ghost_member, opts) do
         {:ok, user}
       end
     else
@@ -227,6 +227,17 @@ defmodule Bonfire.Ghost.Sync.Members do
   hasn't caught up with Ghost yet) are skipped — reconciliation will pick
   them up on the next member-sync after the tier sync runs.
   """
+  # `reconcile_tiers: false` skips reconciliation entirely — used by the article-author path,
+  # whose Ghost *staff* payload has no tiers to reconcile (and looking them up as a member would
+  # be a usually-futile round-trip on the embed mount's critical path).
+  defp maybe_reconcile_circles(user, ghost_member, opts) do
+    if Keyword.get(opts, :reconcile_tiers, true) do
+      reconcile_circles(user, ghost_member, opts)
+    else
+      {:ok, %{added: 0, removed: 0}}
+    end
+  end
+
   @spec reconcile_circles(Bonfire.Data.Identity.User.t(), map(), keyword()) :: {:ok, diff()}
   def reconcile_circles(user, ghost_member, opts \\ [])
 
@@ -243,8 +254,51 @@ defmodule Bonfire.Ghost.Sync.Members do
     end
   end
 
-  def reconcile_circles(user, _ghost_member, opts),
-    do: reconcile_circles(user, %{"tiers" => []}, opts)
+  # No `"tiers"` key means this isn't a complete member payload (a Ghost *staff* user has no
+  # tiers field at all; a webhook payload may omit it) — NOT "on no tiers". Coercing it to
+  # `%{"tiers" => []}` would remove the user from every `ghost_tier:*` circle, silently stripping
+  # paid access. Resolve the real tiers instead, and if we can't, leave their circles alone.
+  def reconcile_circles(user, ghost_member, opts) do
+    case authoritative_tiers(ghost_member) do
+      {:ok, tiers} ->
+        reconcile_circles(user, %{"tiers" => tiers}, opts)
+
+      :not_a_member ->
+        {:ok, %{added: 0, removed: 0}}
+
+      {:error, reason} ->
+        # must NOT report success: the caller is usually MemberWebhookWorker, and `{:ok, _}` here
+        # makes Oban mark the job succeeded, dropping the tier change instead of retrying
+        warn(reason, "Could not resolve Ghost tiers — failing so the job is retried")
+        {:error, reason}
+    end
+  end
+
+  # `:not_a_member` — no such member, or Ghost unconfigured: permanent, don't retry.
+  # `{:error, _}` — Ghost errored/timed out: transient, DO retry.
+  defp authoritative_tiers(%{"email" => email}) when is_binary(email) and email != "" do
+    case Ghost.admin_client() do
+      {:ok, c} ->
+        case AdminAPI.get_member_by_email(c, email, include: "tiers") do
+          {:ok, %{"members" => [member | _]}} ->
+            case e(member, "tiers", nil) do
+              tiers when is_list(tiers) -> {:ok, tiers}
+              _ -> :not_a_member
+            end
+
+          {:ok, _no_members} ->
+            :not_a_member
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      _not_configured ->
+        :not_a_member
+    end
+  end
+
+  defp authoritative_tiers(_), do: :not_a_member
 
   # --- Backfill ------------------------------------------------------------
 

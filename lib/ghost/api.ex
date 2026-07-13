@@ -23,7 +23,12 @@ defmodule Bonfire.Ghost.API do
     Req.new(
       base_url: String.trim_trailing(base_url, "/") <> "/ghost/api/content",
       params: [key: api_key],
-      headers: [{"accept-version", "v5.0"}]
+      headers: [{"accept-version", "v5.0"}],
+      # bounded: Ghost is called synchronously from request-critical paths (login, embed mount),
+      # and Req's defaults (15s x 3 retries) would hang them for ~a minute
+      receive_timeout: Bonfire.Ghost.request_timeout(),
+      retry: :safe_transient,
+      max_retries: 1
     )
   end
 

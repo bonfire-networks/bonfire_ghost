@@ -17,20 +17,27 @@ defmodule Bonfire.Ghost.EmbedHelper do
   alias Bonfire.Boundaries.Grants
 
   @doc """
-  Finds or creates a Bonfire Post for a Ghost article.
+  Finds or creates a Bonfire Post for a Ghost article, on demand from the comments embed.
 
-  `url` is the article's page URL (already known from embed params — used as dedup key via Peered).
-  `slug_or_id` is the Ghost canonical slug or `"id:<ghost_id>"`.
+  `url` is the article's page URL as reported by the embedding page — used only as a
+  cheap dedup hint. `slug_or_id` is the Ghost canonical slug or `"id:<ghost_id>"`.
 
   Returns `{:ok, post}` on success, or `{:error, reason}` otherwise.
 
-  Opts:
-    - `current_user` — user to attribute the post to (required)
-    - `boundary` — visibility boundary (default: "public")
-    - `group_id` — context_id for group posting (optional)
-    - `require_topic` — boolean; only create if article's primary tag matches a Bonfire topic (optional)
+  ## Untrusted input
+
+  This is reachable **unauthenticated** by anyone (the embed LiveView is loaded on
+  third-party pages, and its URL params are whatever the visitor sends). So it takes
+  no caller opts that could choose the post's author, audience or destination — those
+  come from instance settings (`auto_import_as`, `post_into_group`) and the article's
+  own Ghost `visibility`. See `@untrusted_opts`; anything else lands via `import_article/2`,
+  which is only called by trusted server-side paths (webhook worker, operator backfill).
   """
   def get_or_create_post_for_article(slug_or_id, url, opts \\ []) do
+    opts = drop_untrusted_opts(opts)
+
+    # fast path, to skip the Ghost API round-trip. A forged `url` can only surface an existing
+    # thread, which the embed can already do by id.
     case url && Peered.get_by_uri(url) do
       {:ok, %{id: existing_id} = post} ->
         info(existing_id, "found an existing post")
@@ -41,9 +48,46 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
         with true <- Ghost.configured?() || {:error, :ghost_not_configured},
              {:ok, article} <- fetch_article(slug_or_id) do
-          create_post_from_article(article, url, opts)
+          # dedup/store against the URL *Ghost* reports, never the caller's: a varying query
+          # string would otherwise mint a duplicate post per variant and poison the canonical URI
+          case article_url(article) do
+            canonical when is_binary(canonical) ->
+              case Peered.get_by_uri(canonical) do
+                {:ok, %{id: existing_id} = post} ->
+                  info(existing_id, "found an existing post by canonical URL")
+                  {:ok, post}
+
+                _ ->
+                  create_post_from_article(article, canonical, opts)
+              end
+
+            _ ->
+              create_post_from_article(article, nil, opts)
+          end
         end
     end
+  end
+
+  # Opts an embed visitor must never choose: `:creator`/`:current_user` forge the author,
+  # `:boundary` overrides the paywall mapping in `article_boundary_attrs/3`, `:group_id` posts
+  # into an arbitrary group (force-joining the author), `:require_topic` bypasses topic-gating.
+  @untrusted_opts [:creator, :boundary, :group_id, :require_topic, :current_user]
+
+  defp drop_untrusted_opts(opts) do
+    {untrusted, rest} = Keyword.split(opts, @untrusted_opts)
+
+    case Enum.reject(untrusted, &match?({_, nil}, &1)) do
+      [] ->
+        :ok
+
+      ignored ->
+        warn(
+          Keyword.keys(ignored),
+          "Ignoring embed-supplied opts — author, audience and destination come from instance settings (Ghost settings: import author / post into group)"
+        )
+    end
+
+    rest
   end
 
   @doc """
@@ -91,17 +135,128 @@ defmodule Bonfire.Ghost.EmbedHelper do
   canonical URL. Reversed by re-publishing (see `import_article/2`).
   """
   def hide_article(article_or_url, _opts \\ []) do
-    url = article_url(article_or_url)
-
-    case url && Peered.get_by_uri(url) do
+    case find_imported_post(article_or_url) do
       {:ok, %{id: existing_id}} ->
-        Bonfire.Boundaries.Blocks.block(existing_id, :hide, :instance_wide)
+        retract(existing_id)
 
       _ ->
-        info(url, "no post found for article — nothing to hide")
+        info(article_or_url, "no post found for article — nothing to hide")
         {:ok, :not_found}
     end
   end
+
+  # `:hide` grants `:cannot_discover`, which excludes `[:read, :request]` — it unlists but leaves
+  # the article readable by direct link. Retraction must also deny `:read`.
+  defp retract(post_id) do
+    with {:ok, _} <- Bonfire.Boundaries.Blocks.block(post_id, :hide, :instance_wide),
+         :ok <- set_read_denial(post_id, :deny) do
+      {:ok, :hidden}
+    end
+  end
+
+  defp set_read_denial(post_id, :deny) do
+    with {:ok, acl} <- Acls.get_or_create_object_custom_acl(post_id, :instance_wide) do
+      apply_read_denial(acl, :deny)
+    end
+  end
+
+  # get-only, never get_or_create: `maybe_unhide/1` runs on every update webhook, so creating
+  # here would mint a custom ACL for every article on its first edit (and `single()` errors
+  # permanently if two concurrent webhooks each create one). No custom ACL → nothing to lift.
+  defp set_read_denial(post_id, :allow) do
+    case Acls.get_object_custom_acl(post_id) do
+      {:ok, acl} -> apply_read_denial(acl, :allow)
+      _ -> :ok
+    end
+  end
+
+  defp apply_read_denial(acl, deny_or_allow) do
+    circles = Bonfire.Boundaries.Blocks.instance_wide_circles([:guest, :local, :activity_pub])
+
+    result =
+      case deny_or_allow do
+        :deny -> Grants.grant_role(circles, acl, :cannot_read, scope: :instance_wide)
+        :allow -> Grants.remove_role(circles, acl, :cannot_read, scope: :instance_wide)
+      end
+
+    if Enums.all_ok?(result) do
+      :ok
+    else
+      error(result, "Could not #{deny_or_allow} :read on retracted Ghost article")
+    end
+  end
+
+  # A real `post.deleted` payload carries no `url` (Ghost builds `previous` from changed DB
+  # attributes; `url` is computed), so fall back to `canonical_url`, then to the slug.
+  defp find_imported_post(article_or_url) do
+    article_or_url
+    |> candidate_urls()
+    |> Enum.find_value(fn url ->
+      case Peered.get_by_uri(url) do
+        {:ok, post} -> {:ok, post}
+        _ -> nil
+      end
+    end)
+    |> case do
+      {:ok, post} -> {:ok, post}
+      _ -> find_by_slug_suffix(article_slug(article_or_url))
+    end
+  end
+
+  defp article_slug(article) when is_map(article), do: e(article, "slug", nil)
+  defp article_slug(_), do: nil
+
+  # Needs no base URL, so unlike `slug_url/1` it still works when `GHOST_URL` (the API base) isn't
+  # the blog's public site URL — which is common, and would otherwise make deletes silently no-op.
+  defp find_by_slug_suffix(slug) when is_binary(slug) and slug != "" do
+    import Ecto.Query
+
+    pattern = "%/" <> slug <> "/"
+
+    Bonfire.Common.Repo.one(
+      from(p in Bonfire.Data.ActivityPub.Peered,
+        where: like(p.canonical_uri, ^pattern),
+        select: %{id: p.id},
+        limit: 1
+      )
+    )
+    |> case do
+      %{id: id} -> {:ok, %{id: id}}
+      _ -> {:error, :not_found}
+    end
+  rescue
+    e ->
+      warn(e, "Could not look up Ghost article by slug suffix")
+      {:error, :not_found}
+  end
+
+  defp find_by_slug_suffix(_), do: {:error, :not_found}
+
+  defp candidate_urls(url) when is_binary(url), do: [url]
+
+  defp candidate_urls(article) when is_map(article) do
+    [
+      e(article, "url", nil),
+      e(article, "canonical_url", nil),
+      slug_url(e(article, "slug", nil))
+    ]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+  end
+
+  defp candidate_urls(_), do: []
+
+  defp slug_url(slug) when is_binary(slug) and slug != "" do
+    case Ghost.ghost_url() do
+      base when is_binary(base) and base != "" ->
+        String.trim_trailing(base, "/") <> "/" <> slug <> "/"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp slug_url(_), do: nil
 
   defp article_url(url) when is_binary(url), do: url
   defp article_url(article) when is_map(article), do: e(article, "url", nil)
@@ -112,6 +267,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
   # reverse it — `unblock(:hide)` is a no-op when nothing was hidden.
   defp maybe_unhide(post_id) do
     Bonfire.Boundaries.Blocks.unblock(post_id, :hide, :instance_wide)
+    # mirrors `retract/1`, else a re-published article returns to feeds but stays unreadable
+    set_read_denial(post_id, :allow)
   rescue
     e -> warn(e, "Could not un-hide previously hidden Ghost post")
   end
@@ -547,8 +704,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
-  # Shared author resolution
-  # Returns a user struct or ID or nil.
+  # Returns a user struct, an ID, or nil. `opts[:creator]`/`opts[:current_user]` are honoured for
+  # TRUSTED callers only (`import_article/2`); the embed entrypoint strips them (`@untrusted_opts`).
   defp resolve_author(article, opts) do
     resolve_ghost_author(article) || opts[:creator] || configured_default_author() ||
       current_user_or_id(opts)
@@ -569,21 +726,12 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
   # Returns the configured user ID as-is (no lookup) — it's passed straight to
   # `Bonfire.Posts.publish`/`PostContents.edit` as the author.
-  defp configured_default_author do
-    case Config.get([:bonfire_ghost, :auto_import_as], nil) do
-      id when is_binary(id) and id != "" -> id
-      _ -> nil
-    end
-  end
+  defp configured_default_author, do: Ghost.auto_import_as()
 
-  # Instance-wide group/topic that webhook auto-import and embeds post into by
-  # default (an embed's `data-group-id` param still overrides via `:group_id` opt).
-  defp configured_default_group do
-    case Config.get([:bonfire_ghost, :post_into_group], nil) do
-      id when is_binary(id) and id != "" -> id
-      _ -> nil
-    end
-  end
+  # Instance-wide group/topic that webhook auto-import and embeds post into. Trusted callers
+  # (`import_article/2`) may still override it with a `:group_id` opt; an embed may NOT — see
+  # `@untrusted_opts`.
+  defp configured_default_group, do: Ghost.post_into_group()
 
   defp configured_auto_import_tag do
     Config.get([:bonfire_ghost, :auto_import_tag], nil)
@@ -601,7 +749,12 @@ defmodule Bonfire.Ghost.EmbedHelper do
          # authors need a full identity to be attributed as a poster, so eagerly
          # create the user (regular members instead go through /create-user)
          {:ok, user} <-
-           Bonfire.Ghost.Sync.Members.provision_from_ghost_member(ghost_staff, create_user: true) do
+           Bonfire.Ghost.Sync.Members.provision_from_ghost_member(ghost_staff,
+             create_user: true,
+             # a Ghost STAFF payload has no tiers — don't reconcile (it would either wipe their
+             # paid circles, or cost a futile member lookup on the embed mount's hot path)
+             reconcile_tiers: false
+           ) do
       user
     else
       other ->

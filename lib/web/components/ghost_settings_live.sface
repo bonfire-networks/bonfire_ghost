@@ -1,4 +1,15 @@
 <div class="space-y-4">
+  {#if !@authorized}
+    <div class="rounded-box border border-base-content/10 bg-base-100 p-6 flex items-start gap-3">
+      <#Icon iconify="ph:lock-simple" class="w-5 h-5 text-muted shrink-0" />
+      <div>
+        <h3 class="font-medium">{l("Admins only")}</h3>
+        <p class="text-sm text-muted">{l(
+            "You need permission to manage this instance to view the Ghost integration settings."
+          )}</p>
+      </div>
+    </div>
+  {#else}
   {!-- Loading State — skeleton, not a centered spinner (product convention) --}
   {#if @loading}
     <div class="rounded-box border border-base-content/10 bg-base-100 p-4 flex items-center gap-4">
@@ -572,5 +583,6 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
         <p class="text-sm">{inspect(@error)}</p>
       </div>
     </div>
+  {/if}
   {/if}
 </div>

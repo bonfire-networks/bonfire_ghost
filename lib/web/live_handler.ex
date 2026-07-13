@@ -21,24 +21,32 @@ defmodule Bonfire.Ghost.LiveHandler do
   @tiers_include "benefits,monthly_price,yearly_price"
 
   def handle_event("refresh", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:loading, true)
-     |> load_ghost_data()}
+    if not can_configure_instance?(socket) do
+      {:noreply, assign_flash(socket, :error, unauthorized_message())}
+    else
+      {:noreply,
+       socket
+       |> assign(:loading, true)
+       |> load_ghost_data()}
+    end
   end
 
   def handle_event("load_more", _params, socket) do
-    current_page = get_in(socket.assigns, [:page_info, :page]) || 1
-    next_page = current_page + 1
-
-    with {:ok, c} <- Ghost.admin_client(),
-         {:ok, %{"members" => new_members, "meta" => meta}} <-
-           AdminAPI.list_members(c, limit: 50, page: next_page, include: @members_include) do
-      page_info = extract_page_info(meta)
-      members = socket.assigns.members ++ new_members
-      {:noreply, assign(socket, members: members, page_info: page_info)}
+    if not can_configure_instance?(socket) do
+      {:noreply, assign_flash(socket, :error, unauthorized_message())}
     else
-      _ -> {:noreply, socket}
+      current_page = get_in(socket.assigns, [:page_info, :page]) || 1
+      next_page = current_page + 1
+
+      with {:ok, c} <- Ghost.admin_client(),
+           {:ok, %{"members" => new_members, "meta" => meta}} <-
+             AdminAPI.list_members(c, limit: 50, page: next_page, include: @members_include) do
+        page_info = extract_page_info(meta)
+        members = socket.assigns.members ++ new_members
+        {:noreply, assign(socket, members: members, page_info: page_info)}
+      else
+        _ -> {:noreply, socket}
+      end
     end
   end
 

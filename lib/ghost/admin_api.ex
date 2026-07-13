@@ -41,7 +41,11 @@ defmodule Bonfire.Ghost.AdminAPI do
             headers: [
               {"authorization", "Ghost #{token}"},
               {"accept-version", "v5.0"}
-            ]
+            ],
+            # see `Bonfire.Ghost.API.client/2`
+            receive_timeout: Bonfire.Ghost.request_timeout(),
+            retry: :safe_transient,
+            max_retries: 1
           )
 
         {:ok, client}
@@ -170,13 +174,41 @@ defmodule Bonfire.Ghost.AdminAPI do
   @doc """
   Gets a member by email address.
 
+  `email` is escaped before being interpolated into the NQL filter — on the gated-login
+  path it is raw, unvalidated user input (the login-email providers run on the submitted
+  form field before any changeset validation), so an unescaped quote would let a caller
+  break out of the string literal and alter the query.
+
   ## Examples
 
       iex> Bonfire.Ghost.AdminAPI.get_member_by_email(client, "user@example.com")
       {:ok, %{"members" => [%{...}]}}
   """
   def get_member_by_email(client, email, opts \\ []) when is_binary(email) do
-    list_members(client, Keyword.merge(opts, filter: "email:'#{email}'", limit: 1))
+    list_members(
+      client,
+      Keyword.merge(opts, filter: "email:'#{escape_nql_string(email)}'", limit: 1)
+    )
+  end
+
+  @doc """
+  Escapes a value for use inside a single-quoted Ghost NQL string literal.
+
+  Backslash must be escaped before the quote, or the backslash rule would double the one the
+  quote rule just added. See https://ghost.org/docs/content-api/#filtering
+
+  ## Examples
+
+      iex> Bonfire.Ghost.AdminAPI.escape_nql_string("o'brien@example.com")
+      "o\\\\'brien@example.com"
+
+      iex> Bonfire.Ghost.AdminAPI.escape_nql_string("plain@example.com")
+      "plain@example.com"
+  """
+  def escape_nql_string(value) when is_binary(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("'", "\\'")
   end
 
   @doc """

@@ -44,14 +44,29 @@ Add this script tag to your Ghost theme's `post.hbs`:
 <script
   src="https://your-bonfire.example/js/comments_embed.js?v1.4"
   data-canonical-slug="{{slug}}"
-  data-group-id="optional-bonfire-group-id"
-  data-require-topic="true"
 ></script>
 ```
 
 - `data-canonical-slug` — Ghost post slug (deduplicates via URL; `data-canonical-id` for Ghost ID)
-- `data-group-id` — post the thread inside a Bonfire group/topic
-- `data-require-topic` — only create a thread if the article's primary tag matches a Bonfire topic
+
+### Who a created thread belongs to, and where it goes
+
+The embed runs on your blog, so **anyone** can craft its iframe URL. It therefore accepts no
+attribute that chooses the post's author, audience or destination — those are decided by the
+instance, in **Ghost settings**:
+
+| Setting | Replaces the old attribute | What it does |
+|---|---|---|
+| Import author (`auto_import_as`) | `data-creator` | Who imported articles are attributed to. **Required** — without it, no thread is created. |
+| Post into group (`post_into_group`) | `data-group-id` | The group/topic imported articles are posted into. |
+| Require topic (`require_topic`) | `data-require-topic` | Only import when the article's primary tag matches a Bonfire topic. |
+| — (derived from Ghost `visibility`) | `data-boundary` | Public/members/paid articles get their audience from Ghost itself; paid articles are `:see`-only with `:read` gated to the `ghost_tier:*` circles. |
+
+> **Upgrading:** `data-creator`, `data-boundary`, `data-group-id`, `data-to-circles` and
+> `data-require-topic` are now **ignored** (they let a visitor forge a post's author, or publish a
+> paid article publicly). Old snippets keep working — the params are just dropped, with a warning
+> logged — but if your theme relied on `data-group-id` or `data-require-topic`, set the equivalent
+> instance setting above or that behaviour is silently lost.
 
 ### Programmatic Access
 

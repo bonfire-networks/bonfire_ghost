@@ -58,6 +58,21 @@ defmodule Bonfire.Ghost do
   end
 
   @doc """
+  The user id that imported articles (and on-demand embed thread anchors) are attributed
+  to, or nil.
+
+  This is the instance's "post on our behalf" identity. It is the *only* trusted source
+  for an import's author — embeds may not supply one (see `Bonfire.Ghost.EmbedHelper`'s
+  `@untrusted_opts`). Same `Config.get` caveat as `post_into_group/0`.
+  """
+  def auto_import_as do
+    case Config.get([:bonfire_ghost, :auto_import_as], nil) do
+      id when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  @doc """
   Counts articles imported from the Ghost blog at `blog_url`.
 
   Imported articles store their Ghost page URL as the `canonical_uri` on a `Peered` row, so we count the rows whose `canonical_uri` starts with the blog URL. Pass the blog's public site URL (the Ghost Content API `settings.url`, which is what article URLs actually use) — falling back to the configured `GHOST_URL` when unknown. Returns an integer, or `nil` when no usable URL is available.
@@ -90,6 +105,20 @@ defmodule Bonfire.Ghost do
   @doc "Returns the configured Ghost Content API key, or nil if not configured."
   def api_key do
     Config.get([:bonfire_ghost, :content_api_key])
+  end
+
+  @doc """
+  How long (ms) to wait on a Ghost API response before giving up. Default 8s.
+
+  Kept short on purpose: Ghost is called synchronously from request-critical paths (the gated-login
+  provider, inside the login request; the comments embed, during LiveView mount), so a hung Ghost
+  must fail fast rather than pin those processes.
+  """
+  def request_timeout do
+    case Config.get([:bonfire_ghost, :request_timeout], 8_000) do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _ -> 8_000
+    end
   end
 
   @doc "Returns true if both ghost_url and api_key are configured."
