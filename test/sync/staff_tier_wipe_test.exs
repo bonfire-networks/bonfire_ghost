@@ -95,7 +95,10 @@ defmodule Bonfire.Ghost.Sync.StaffTierWipeTest do
 
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
-      Repatch.patch(AdminAPI, :get_member_by_email, fn :client, _e, _o -> {:ok, %{"members" => []}} end)
+
+      Repatch.patch(AdminAPI, :get_member_by_email, fn :client, _e, _o ->
+        {:ok, %{"members" => []}}
+      end)
 
       assert {:ok, _diff} = Members.reconcile_circles(user, staff_payload(), [])
 
@@ -139,7 +142,8 @@ defmodule Bonfire.Ghost.Sync.StaffTierWipeTest do
       user = paying_member_user!()
 
       # a real member payload says, authoritatively, "on no tiers"
-      assert {:ok, _diff} = Members.reconcile_circles(user, %{"email" => @email, "tiers" => []}, [])
+      assert {:ok, _diff} =
+               Members.reconcile_circles(user, %{"email" => @email, "tiers" => []}, [])
 
       refute Circles.is_encircled_by?(user, gold_circle!().id),
              "a genuine downgrade must still remove the tier circle"

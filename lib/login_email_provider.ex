@@ -72,5 +72,4 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
       Enum.any?(member_slugs, &(&1 in required_slugs))
     end
   end
-
 end

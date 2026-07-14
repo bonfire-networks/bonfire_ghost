@@ -4,585 +4,583 @@
       <#Icon iconify="ph:lock-simple" class="w-5 h-5 text-muted shrink-0" />
       <div>
         <h3 class="font-medium">{l("Admins only")}</h3>
-        <p class="text-sm text-muted">{l(
-            "You need permission to manage this instance to view the Ghost integration settings."
-          )}</p>
+        <p class="text-sm text-muted">{l("You need permission to manage this instance to view the Ghost integration settings.")}</p>
       </div>
     </div>
   {#else}
-  {!-- Loading State — skeleton, not a centered spinner (product convention) --}
-  {#if @loading}
-    <div class="rounded-box border border-base-content/10 bg-base-100 p-4 flex items-center gap-4">
-      <div class="skeleton h-12 w-12 rounded" />
-      <div class="flex-1 space-y-2">
-        <div class="skeleton h-4 w-48" />
-        <div class="skeleton h-3 w-64" />
-      </div>
-      <div class="skeleton h-8 w-24" />
-    </div>
-    <div class="skeleton h-40 w-full rounded-box" />
-    <div class="skeleton h-40 w-full rounded-box" />
-
-    {!-- Not Configured State — first-run onboarding gate, kept prominent --}
-  {#elseif is_nil(@settings)}
-    <div class="rounded-box border border-base-content/10 bg-base-100 p-6">
-      <div class="flex items-start gap-4">
-        <div class="w-12 h-12 rounded bg-base-200 flex items-center justify-center shrink-0">
-          <#Icon iconify="ph:ghost-duotone" class="w-6 h-6 text-muted" />
+    {!-- Loading State — skeleton, not a centered spinner (product convention) --}
+    {#if @loading}
+      <div class="rounded-box border border-base-content/10 bg-base-100 p-4 flex items-center gap-4">
+        <div class="skeleton h-12 w-12 rounded" />
+        <div class="flex-1 space-y-2">
+          <div class="skeleton h-4 w-48" />
+          <div class="skeleton h-3 w-64" />
         </div>
-        <div class="min-w-0">
-          <h3 class="font-semibold text-base">{l("Connect your Ghost blog")}</h3>
-          <p class="text-sm text-muted mt-1">
-            {l("Set these environment variables, then restart to connect:")}
-          </p>
-          <pre class="mt-3 text-xs bg-base-200 text-base-content p-3 rounded-box overflow-x-auto">GHOST_URL=https://your-blog.ghost.io
+        <div class="skeleton h-8 w-24" />
+      </div>
+      <div class="skeleton h-40 w-full rounded-box" />
+      <div class="skeleton h-40 w-full rounded-box" />
+
+      {!-- Not Configured State — first-run onboarding gate, kept prominent --}
+    {#elseif is_nil(@settings)}
+      <div class="rounded-box border border-base-content/10 bg-base-100 p-6">
+        <div class="flex items-start gap-4">
+          <div class="w-12 h-12 rounded bg-base-200 flex items-center justify-center shrink-0">
+            <#Icon iconify="ph:ghost-duotone" class="w-6 h-6 text-muted" />
+          </div>
+          <div class="min-w-0">
+            <h3 class="font-semibold text-base">{l("Connect your Ghost blog")}</h3>
+            <p class="text-sm text-muted mt-1">
+              {l("Set these environment variables, then restart to connect:")}
+            </p>
+            <pre class="mt-3 text-xs bg-base-200 text-base-content p-3 rounded-box overflow-x-auto">GHOST_URL=https://your-blog.ghost.io
 GHOST_CONTENT_API_KEY=your_content_api_key
 GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</pre>
-        </div>
-      </div>
-    </div>
-
-    {!-- Connected State --}
-  {#else}
-    {!-- Status band: always-visible connection + vitals + Refresh --}
-    <div class="rounded-box border border-base-content/10 bg-base-100 p-4 flex flex-wrap items-center gap-x-6 gap-y-3">
-      <div class="flex items-center gap-3 min-w-0">
-        {#if logo = @settings["logo"] || @settings["icon"]}
-          <img src={logo} alt="" class="w-10 h-10 rounded object-contain bg-base-200 shrink-0">
-        {#else}
-          <div class="w-10 h-10 rounded bg-base-200 flex items-center justify-center shrink-0">
-            <#Icon iconify="ph:ghost-duotone" class="w-5 h-5 text-muted" />
           </div>
-        {/if}
-        <div class="min-w-0">
-          <div class="flex items-center gap-2 flex-wrap">
-            <span class="font-semibold text-base truncate">{@settings["title"] || l("Untitled blog")}</span>
-            <span :if={@settings["version"]} class="badge badge-sm badge-ghost">{@settings["version"]}</span>
-            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-success">
-              <span class="w-2 h-2 rounded-full bg-success" />
-              {l("Connected")}
-            </span>
-          </div>
-          <a
-            :if={@settings["url"]}
-            href={@settings["url"]}
-            target="_blank"
-            rel="noopener"
-            class="link link-hover text-sm text-muted inline-flex items-center gap-1 mt-0.5"
-          >
-            <span class="truncate">{@settings["url"]}</span>
-            <#Icon iconify="ph:arrow-square-out" class="w-4 h-4 shrink-0" />
-          </a>
         </div>
       </div>
 
-      <div class="flex items-center gap-3 flex-wrap sm:ml-auto">
-        {!-- Vitals: grouped stat cells with grouped numbers for at-a-glance reading --}
-        <div
-          :if={@page_info || @tiers != [] || @articles_count}
-          class="flex divide-x divide-base-content/10 rounded-box border border-base-content/10 bg-base-200/40"
-        >
-          {#if @page_info}
-            <div class="px-4 py-1.5 text-center">
-              <div class="text-lg font-bold tabular-nums leading-tight">{format_count(@page_info.total)}</div>
-              <div class="text-xs text-muted">{l("members")}</div>
+      {!-- Connected State --}
+    {#else}
+      {!-- Status band: always-visible connection + vitals + Refresh --}
+      <div class="rounded-box border border-base-content/10 bg-base-100 p-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div class="flex items-center gap-3 min-w-0">
+          {#if logo = @settings["logo"] || @settings["icon"]}
+            <img src={logo} alt="" class="w-10 h-10 rounded object-contain bg-base-200 shrink-0">
+          {#else}
+            <div class="w-10 h-10 rounded bg-base-200 flex items-center justify-center shrink-0">
+              <#Icon iconify="ph:ghost-duotone" class="w-5 h-5 text-muted" />
             </div>
           {/if}
-          {#if @tiers != []}
-            <div class="px-4 py-1.5 text-center">
-              <div class="text-lg font-bold tabular-nums leading-tight">{format_count(length(@tiers))}</div>
-              <div class="text-xs text-muted">{l("tiers")}</div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-semibold text-base truncate">{@settings["title"] || l("Untitled blog")}</span>
+              <span :if={@settings["version"]} class="badge badge-sm badge-ghost">{@settings["version"]}</span>
+              <span class="inline-flex items-center gap-1.5 text-xs font-medium text-success">
+                <span class="w-2 h-2 rounded-full bg-success" />
+                {l("Connected")}
+              </span>
             </div>
-          {/if}
-          {#if @articles_count}
-            <div class="px-4 py-1.5 text-center" title={l("Articles imported from this blog")}>
-              <div class="text-lg font-bold tabular-nums leading-tight">{format_count(@articles_count)}</div>
-              <div class="text-xs text-muted">{l("articles")}</div>
-            </div>
-          {/if}
-        </div>
-
-        <div class="flex items-center gap-2">
-          <span :if={@last_sync} class="text-xs text-muted">
-            {l("Synced")} {format_date(@last_sync.at)}
-          </span>
-          <button
-            id="ghost-refresh"
-            class="btn btn-ds-outline btn-sm gap-2"
-            phx-click="Bonfire.Ghost:refresh"
-            phx-target={@myself}
-          >
-            <#Icon iconify="ph:arrow-clockwise" class="w-4 h-4" />
-            {l("Refresh")}
-          </button>
-        </div>
-      </div>
-    </div>
-
-    {!-- Article import (open; the priority task) --}
-    {#if Bonfire.Ghost.configured?()}
-      <section class="rounded-box border border-base-content/10 bg-base-100">
-        <div class="flex items-center gap-2 p-4 border-b border-base-content/10">
-          <#Icon iconify="ph:file-arrow-down" class="w-5 h-5 text-muted" />
-          <h3 class="font-semibold text-base">{l("Article import")}</h3>
-        </div>
-
-        <div class="p-4 space-y-4">
-          {!-- Default author — used by BOTH iframe/embed imports and webhook auto-import,
-               so it is not gated behind the auto-import toggle. --}
-          <form phx-submit="Bonfire.Common.Settings:save">
-            <Bonfire.UI.Common.SettingsInputLive
-              keys={[:bonfire_ghost, :auto_import_as]}
-              scope={:instance}
-              name={l("Default author")}
-              description={l(
-                "User ID that imported articles are attributed to when the Ghost author has no matching local user."
-              )}
-              placeholder="user ID"
-              class="input input-bordered input-sm flex-1"
-            />
-          </form>
-
-          {!-- Default group/topic — imported articles are posted into this group (or
-               topic) so they appear in its feed. Used by BOTH webhook auto-import and
-               embeds; an embed's `data-group-id` param still overrides per-request. --}
-          <form phx-submit="Bonfire.Common.Settings:save">
-            <Bonfire.UI.Common.SettingsInputLive
-              keys={[:bonfire_ghost, :post_into_group]}
-              scope={:instance}
-              name={l("Post into group or topic")}
-              description={l(
-                "Optional. ID or @username of a group/topic imported articles are posted into. An embed's data-group-id parameter overrides this."
-              )}
-              placeholder="group ID or @username"
-              class="input input-bordered input-sm flex-1"
-            />
-          </form>
-
-          <form phx-submit="Bonfire.Common.Settings:save">
-            <Bonfire.UI.Common.SettingsInputLive
-              keys={[:bonfire_ghost, :auto_import_tag]}
-              scope={:instance}
-              name={l("Only auto-import these Ghost tags")}
-              description={l(
-                "Optional. Tag slug(s), comma- or space-separated. Auto-import skips posts without one of these tags."
-              )}
-              placeholder="politik"
-              class="input input-bordered input-sm flex-1"
-            />
-          </form>
-
-          {#if @show_topic_matching}
-            <form phx-change="Bonfire.Common.Settings:set">
-              <Bonfire.UI.Common.SettingsToggleLive
-                keys={[:bonfire_ghost, :require_topic]}
-                scope={:instance}
-                name={l("Only import articles matching a topic")}
-                description={l(
-                  "When the destination is a group, only import articles whose primary Ghost tag maps to a topic inside it."
-                )}
-              />
-            </form>
-          {/if}
-
-          <div class="divider my-0" />
-
-          <form phx-change="Bonfire.Common.Settings:set">
-            <Bonfire.UI.Common.SettingsToggleLive
-              keys={[:bonfire_ghost, :auto_import_articles]}
-              scope={:instance}
-              current_value={@auto_import}
-              name={l("Auto-import on publish")}
-              description={l(
-                "Automatically mirror each published Ghost article as a post here (and update/hide it on edit/unpublish). Requires the webhooks below."
-              )}
-            />
-          </form>
-
-          {!-- Webhook setup — verbose, configure-once. Collapsed by default. --}
-          {#if @auto_import}
-            <div x-data="{expanded: false}" class="rounded-box bg-base-200/50 border border-base-content/10">
-              <button
-                id="ghost-webhook-setup-toggle"
-                type="button"
-                x-on:click="expanded = !expanded"
-                class="w-full flex items-center gap-2 p-3 text-sm font-medium text-left"
-              >
-                <#Icon iconify="ph:lightning" class="w-4 h-4 text-muted" />
-                {l("Webhook setup")}
-                <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                  <#Icon iconify="ph:caret-down" class="w-4 h-4" />
-                </span>
-              </button>
-              <div x-show="expanded" x-collapse x-cloak class="px-3 pb-3 text-sm text-muted">
-                <p>{l(
-                    "Add these in Ghost admin → Settings → Integrations, using GHOST_WEBHOOK_SECRET as the secret on each:"
-                  )}</p>
-                <ul class="mt-2 space-y-1 font-mono text-xs">
-                  <li>{l("Post published")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published</span></li>
-                  <li>{l("Published post updated")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published.edited</span></li>
-                  <li>{l("Post unpublished")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.unpublished</span></li>
-                  <li>{l("Post deleted")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.deleted</span></li>
-                </ul>
-              </div>
-            </div>
-          {/if}
-
-          {!-- One-off backfill of articles published before webhooks were set up.
-               Explicit operator action — runs regardless of the auto-import toggle,
-               but honors the author/group/tag/topic settings above. Idempotent. --}
-          <div class="divider my-0" />
-
-          <div class="flex items-center justify-between gap-3 flex-wrap">
-            <div class="min-w-0">
-              <div class="text-sm font-medium text-base-content">{l("Import existing articles")}</div>
-              <div class="text-sm text-muted">
-                {l("Backfill articles published before webhooks were set up. Re-running is safe.")}
-              </div>
-            </div>
-            <button
-              id="ghost-sync-articles"
-              class="btn btn-primary btn-sm gap-2"
-              phx-click="Bonfire.Ghost:sync_articles"
-              phx-target={@myself}
-              data-confirm={l(
-                "Import every published article from this Ghost blog? This can create a large number of posts in the background. It's safe to re-run, but only start it once."
-              )}
+            <a
+              :if={@settings["url"]}
+              href={@settings["url"]}
+              target="_blank"
+              rel="noopener"
+              class="link link-hover text-sm text-muted inline-flex items-center gap-1 mt-0.5"
             >
-              <#Icon iconify="ph:download-simple" class="w-4 h-4" />
-              {l("Sync articles")}
+              <span class="truncate">{@settings["url"]}</span>
+              <#Icon iconify="ph:arrow-square-out" class="w-4 h-4 shrink-0" />
+            </a>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3 flex-wrap sm:ml-auto">
+          {!-- Vitals: grouped stat cells with grouped numbers for at-a-glance reading --}
+          <div
+            :if={@page_info || @tiers != [] || @articles_count}
+            class="flex divide-x divide-base-content/10 rounded-box border border-base-content/10 bg-base-200/40"
+          >
+            {#if @page_info}
+              <div class="px-4 py-1.5 text-center">
+                <div class="text-lg font-bold tabular-nums leading-tight">{format_count(@page_info.total)}</div>
+                <div class="text-xs text-muted">{l("members")}</div>
+              </div>
+            {/if}
+            {#if @tiers != []}
+              <div class="px-4 py-1.5 text-center">
+                <div class="text-lg font-bold tabular-nums leading-tight">{format_count(length(@tiers))}</div>
+                <div class="text-xs text-muted">{l("tiers")}</div>
+              </div>
+            {/if}
+            {#if @articles_count}
+              <div class="px-4 py-1.5 text-center" title={l("Articles imported from this blog")}>
+                <div class="text-lg font-bold tabular-nums leading-tight">{format_count(@articles_count)}</div>
+                <div class="text-xs text-muted">{l("articles")}</div>
+              </div>
+            {/if}
+          </div>
+
+          <div class="flex items-center gap-2">
+            <span :if={@last_sync} class="text-xs text-muted">
+              {l("Synced")} {format_date(@last_sync.at)}
+            </span>
+            <button
+              id="ghost-refresh"
+              class="btn btn-ds-outline btn-sm gap-2"
+              phx-click="Bonfire.Ghost:refresh"
+              phx-target={@myself}
+            >
+              <#Icon iconify="ph:arrow-clockwise" class="w-4 h-4" />
+              {l("Refresh")}
             </button>
           </div>
         </div>
-      </section>
-    {/if}
+      </div>
 
-    {!-- Access & login (open) --}
-    {#if Bonfire.Ghost.admin_configured?()}
-      <section class="rounded-box border border-base-content/10 bg-base-100">
-        <div class="flex items-center gap-2 p-4 border-b border-base-content/10">
-          <#Icon iconify="ph:lock-simple" class="w-5 h-5 text-muted" />
-          <h3 class="font-semibold text-base">{l("Access & login")}</h3>
-        </div>
+      {!-- Article import (open; the priority task) --}
+      {#if Bonfire.Ghost.configured?()}
+        <section class="rounded-box border border-base-content/10 bg-base-100">
+          <div class="flex items-center gap-2 p-4 border-b border-base-content/10">
+            <#Icon iconify="ph:file-arrow-down" class="w-5 h-5 text-muted" />
+            <h3 class="font-semibold text-base">{l("Article import")}</h3>
+          </div>
 
-        <div class="p-4 space-y-4">
-          <form phx-change="Bonfire.Common.Settings:set">
-            <Bonfire.UI.Common.SettingsToggleLive
-              keys={[:bonfire_ui_me, :login, :passwordless_only]}
-              scope={:instance}
-              name={l("Gated login (Ghost members only)")}
-              description={l(
-                "Hide the password and signup forms on the login page. Ghost members get a passwordless email link instead."
-              )}
-            />
-          </form>
-
-          {#if @gated_login}
+          <div class="p-4 space-y-4">
+            {!-- Default author — used by BOTH iframe/embed imports and webhook auto-import,
+               so it is not gated behind the auto-import toggle. --}
             <form phx-submit="Bonfire.Common.Settings:save">
-              <Bonfire.UI.Common.SettingsTextareaLive
-                keys={[:bonfire_ui_me, :login, :gated_login_message]}
+              <Bonfire.UI.Common.SettingsInputLive
+                keys={[:bonfire_ghost, :auto_import_as]}
                 scope={:instance}
-                name={l("Login page message")}
+                name={l("Default author")}
                 description={l(
-                  "Optional. Shown above the login form, to explain who can sign in (e.g. what kind of account is needed)."
+                  "User ID that imported articles are attributed to when the Ghost author has no matching local user."
                 )}
-                placeholder={l("To join %{instance}, you need a Club or Comrade account.",
-                  instance: Bonfire.Application.name()
+                placeholder="user ID"
+                class="input input-bordered input-sm flex-1"
+              />
+            </form>
+
+            {!-- Default group/topic — imported articles are posted into this group (or
+               topic) so they appear in its feed. Used by BOTH webhook auto-import and
+               embeds; an embed's `data-group-id` param still overrides per-request. --}
+            <form phx-submit="Bonfire.Common.Settings:save">
+              <Bonfire.UI.Common.SettingsInputLive
+                keys={[:bonfire_ghost, :post_into_group]}
+                scope={:instance}
+                name={l("Post into group or topic")}
+                description={l(
+                  "Optional. ID or @username of a group/topic imported articles are posted into. An embed's data-group-id parameter overrides this."
                 )}
+                placeholder="group ID or @username"
+                class="input input-bordered input-sm flex-1"
               />
             </form>
 
             <form phx-submit="Bonfire.Common.Settings:save">
               <Bonfire.UI.Common.SettingsInputLive
-                keys={[:bonfire_ui_me, :login, :external_signup_url]}
+                keys={[:bonfire_ghost, :auto_import_tag]}
                 scope={:instance}
-                name={l("External signup URL")}
+                name={l("Only auto-import these Ghost tags")}
                 description={l(
-                  "Optional. Shows a Sign up button next to login that redirects here (e.g. your Ghost subscribe page)."
+                  "Optional. Tag slug(s), comma- or space-separated. Auto-import skips posts without one of these tags."
                 )}
-                placeholder="https://your-blog.ghost.io/#/portal/signup"
+                placeholder="politik"
                 class="input input-bordered input-sm flex-1"
               />
             </form>
 
-            {#if @tiers != []}
-              <p class="text-sm text-muted flex items-center gap-1.5">
-                <#Icon iconify="ph:arrow-down" class="w-4 h-4" />
-                {l("Choose which tiers are required for access under Membership tiers below.")}
+            {#if @show_topic_matching}
+              <form phx-change="Bonfire.Common.Settings:set">
+                <Bonfire.UI.Common.SettingsToggleLive
+                  keys={[:bonfire_ghost, :require_topic]}
+                  scope={:instance}
+                  name={l("Only import articles matching a topic")}
+                  description={l(
+                    "When the destination is a group, only import articles whose primary Ghost tag maps to a topic inside it."
+                  )}
+                />
+              </form>
+            {/if}
+
+            <div class="divider my-0" />
+
+            <form phx-change="Bonfire.Common.Settings:set">
+              <Bonfire.UI.Common.SettingsToggleLive
+                keys={[:bonfire_ghost, :auto_import_articles]}
+                scope={:instance}
+                current_value={@auto_import}
+                name={l("Auto-import on publish")}
+                description={l(
+                  "Automatically mirror each published Ghost article as a post here (and update/hide it on edit/unpublish). Requires the webhooks below."
+                )}
+              />
+            </form>
+
+            {!-- Webhook setup — verbose, configure-once. Collapsed by default. --}
+            {#if @auto_import}
+              <div x-data="{expanded: false}" class="rounded-box bg-base-200/50 border border-base-content/10">
+                <button
+                  id="ghost-webhook-setup-toggle"
+                  type="button"
+                  x-on:click="expanded = !expanded"
+                  class="w-full flex items-center gap-2 p-3 text-sm font-medium text-left"
+                >
+                  <#Icon iconify="ph:lightning" class="w-4 h-4 text-muted" />
+                  {l("Webhook setup")}
+                  <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
+                    <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+                  </span>
+                </button>
+                <div x-show="expanded" x-collapse x-cloak class="px-3 pb-3 text-sm text-muted">
+                  <p>{l(
+                      "Add these in Ghost admin → Settings → Integrations, using GHOST_WEBHOOK_SECRET as the secret on each:"
+                    )}</p>
+                  <ul class="mt-2 space-y-1 font-mono text-xs">
+                    <li>{l("Post published")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published</span></li>
+                    <li>{l("Published post updated")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.published.edited</span></li>
+                    <li>{l("Post unpublished")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.unpublished</span></li>
+                    <li>{l("Post deleted")} → <span class="text-base-content">{Bonfire.Common.URIs.base_url()}/ghost/webhook/post.deleted</span></li>
+                  </ul>
+                </div>
+              </div>
+            {/if}
+
+            {!-- One-off backfill of articles published before webhooks were set up.
+               Explicit operator action — runs regardless of the auto-import toggle,
+               but honors the author/group/tag/topic settings above. Idempotent. --}
+            <div class="divider my-0" />
+
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div class="min-w-0">
+                <div class="text-sm font-medium text-base-content">{l("Import existing articles")}</div>
+                <div class="text-sm text-muted">
+                  {l("Backfill articles published before webhooks were set up. Re-running is safe.")}
+                </div>
+              </div>
+              <button
+                id="ghost-sync-articles"
+                class="btn btn-primary btn-sm gap-2"
+                phx-click="Bonfire.Ghost:sync_articles"
+                phx-target={@myself}
+                data-confirm={l(
+                  "Import every published article from this Ghost blog? This can create a large number of posts in the background. It's safe to re-run, but only start it once."
+                )}
+              >
+                <#Icon iconify="ph:download-simple" class="w-4 h-4" />
+                {l("Sync articles")}
+              </button>
+            </div>
+          </div>
+        </section>
+      {/if}
+
+      {!-- Access & login (open) --}
+      {#if Bonfire.Ghost.admin_configured?()}
+        <section class="rounded-box border border-base-content/10 bg-base-100">
+          <div class="flex items-center gap-2 p-4 border-b border-base-content/10">
+            <#Icon iconify="ph:lock-simple" class="w-5 h-5 text-muted" />
+            <h3 class="font-semibold text-base">{l("Access & login")}</h3>
+          </div>
+
+          <div class="p-4 space-y-4">
+            <form phx-change="Bonfire.Common.Settings:set">
+              <Bonfire.UI.Common.SettingsToggleLive
+                keys={[:bonfire_ui_me, :login, :passwordless_only]}
+                scope={:instance}
+                name={l("Gated login (Ghost members only)")}
+                description={l(
+                  "Hide the password and signup forms on the login page. Ghost members get a passwordless email link instead."
+                )}
+              />
+            </form>
+
+            {#if @gated_login}
+              <form phx-submit="Bonfire.Common.Settings:save">
+                <Bonfire.UI.Common.SettingsTextareaLive
+                  keys={[:bonfire_ui_me, :login, :gated_login_message]}
+                  scope={:instance}
+                  name={l("Login page message")}
+                  description={l(
+                    "Optional. Shown above the login form, to explain who can sign in (e.g. what kind of account is needed)."
+                  )}
+                  placeholder={l("To join %{instance}, you need a Club or Comrade account.",
+                    instance: Bonfire.Application.name()
+                  )}
+                />
+              </form>
+
+              <form phx-submit="Bonfire.Common.Settings:save">
+                <Bonfire.UI.Common.SettingsInputLive
+                  keys={[:bonfire_ui_me, :login, :external_signup_url]}
+                  scope={:instance}
+                  name={l("External signup URL")}
+                  description={l(
+                    "Optional. Shows a Sign up button next to login that redirects here (e.g. your Ghost subscribe page)."
+                  )}
+                  placeholder="https://your-blog.ghost.io/#/portal/signup"
+                  class="input input-bordered input-sm flex-1"
+                />
+              </form>
+
+              {#if @tiers != []}
+                <p class="text-sm text-muted flex items-center gap-1.5">
+                  <#Icon iconify="ph:arrow-down" class="w-4 h-4" />
+                  {l("Choose which tiers are required for access under Membership tiers below.")}
+                </p>
+              {/if}
+            {/if}
+          </div>
+        </section>
+      {/if}
+
+      {!-- Membership tiers (open when tiers exist): flat rows, not nested cards --}
+      {#if @tiers != []}
+        <section class="rounded-box border border-base-content/10 bg-base-100">
+          <div class="flex items-center justify-between gap-3 p-4 border-b border-base-content/10 flex-wrap">
+            <h3 class="flex items-center gap-2 font-semibold text-base">
+              <#Icon iconify="ph:ticket" class="w-5 h-5 text-muted" />
+              {l("Membership tiers")}
+              <span class="badge badge-sm badge-ghost">{length(@tiers)}</span>
+            </h3>
+            <div class="flex items-center gap-3">
+              {#if @last_sync}
+                <span class="text-xs text-muted">
+                  {l("%{n} new", n: @last_sync.summary.created)},
+                  {l("%{n} updated", n: @last_sync.summary.updated)}{#if @last_sync.summary.archived > 0}, {l("%{n} archived", n: @last_sync.summary.archived)}{/if}{#if @last_sync.summary.errors != []}, {l("%{n} error(s)", n: length(@last_sync.summary.errors))}{/if}
+                </span>
+              {/if}
+              <button
+                id="ghost-sync-tiers"
+                class="btn btn-primary btn-sm gap-2"
+                phx-click="Bonfire.Ghost:sync_tiers"
+                phx-target={@myself}
+                disabled={@syncing}
+                data-confirm={l("Sync membership tiers from Ghost? This creates or updates a Bonfire circle for each tier.")}
+              >
+                {#if @syncing}
+                  <span class="loading loading-spinner loading-xs" />
+                  {l("Syncing…")}
+                {#else}
+                  <#Icon iconify="ph:arrows-clockwise" class="w-4 h-4" />
+                  {l("Sync tiers")}
+                {/if}
+              </button>
+            </div>
+          </div>
+
+          <div class="p-4">
+            <p class="text-sm text-muted mb-3">
+              {l(
+                "Each Ghost tier becomes a Bonfire circle you can grant access to anywhere in the boundaries system."
+              )}
+            </p>
+
+            {#if @gated_login}
+              <p class="text-sm text-muted mb-3">
+                {l("Toggle the tiers required to log in. Leave all off to allow any Ghost member.")}
               </p>
             {/if}
-          {/if}
-        </div>
-      </section>
-    {/if}
 
-    {!-- Membership tiers (open when tiers exist): flat rows, not nested cards --}
-    {#if @tiers != []}
-      <section class="rounded-box border border-base-content/10 bg-base-100">
-        <div class="flex items-center justify-between gap-3 p-4 border-b border-base-content/10 flex-wrap">
-          <h3 class="flex items-center gap-2 font-semibold text-base">
-            <#Icon iconify="ph:ticket" class="w-5 h-5 text-muted" />
-            {l("Membership tiers")}
-            <span class="badge badge-sm badge-ghost">{length(@tiers)}</span>
-          </h3>
-          <div class="flex items-center gap-3">
-            {#if @last_sync}
-              <span class="text-xs text-muted">
-                {l("%{n} new", n: @last_sync.summary.created)},
-                {l("%{n} updated", n: @last_sync.summary.updated)}{#if @last_sync.summary.archived > 0}, {l("%{n} archived", n: @last_sync.summary.archived)}{/if}{#if @last_sync.summary.errors != []}, {l("%{n} error(s)", n: length(@last_sync.summary.errors))}{/if}
-              </span>
-            {/if}
-            <button
-              id="ghost-sync-tiers"
-              class="btn btn-primary btn-sm gap-2"
-              phx-click="Bonfire.Ghost:sync_tiers"
-              phx-target={@myself}
-              disabled={@syncing}
-              data-confirm={l("Sync membership tiers from Ghost? This creates or updates a Bonfire circle for each tier.")}
-            >
-              {#if @syncing}
-                <span class="loading loading-spinner loading-xs" />
-                {l("Syncing…")}
-              {#else}
-                <#Icon iconify="ph:arrows-clockwise" class="w-4 h-4" />
-                {l("Sync tiers")}
-              {/if}
-            </button>
-          </div>
-        </div>
-
-        <div class="p-4">
-          <p class="text-sm text-muted mb-3">
-            {l(
-              "Each Ghost tier becomes a Bonfire circle you can grant access to anywhere in the boundaries system."
-            )}
-          </p>
-
-          {#if @gated_login}
-            <p class="text-sm text-muted mb-3">
-              {l("Toggle the tiers required to log in. Leave all off to allow any Ghost member.")}
-            </p>
-          {/if}
-
-          <div class="divide-hair divide-secondary mt-6">
-            {#for tier <- @tiers}
-              <div class={
-                "py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-4",
-                "opacity-60": !tier["active"]
-              }>
-                <div class="flex items-center gap-2 flex-wrap min-w-0">
-                  <h4 class="font-medium">{tier["name"]}</h4>
-                  {#if !tier["active"]}
-                    <span class="badge badge-xs badge-warning">{l("archived")}</span>
-                  {/if}
-                  {#if tier["visibility"] == "none"}
-                    <span class="badge badge-xs badge-ghost">{l("hidden")}</span>
-                  {/if}
-                </div>
-
-                <div class="flex items-center gap-4 shrink-0">
-                  <div class="text-right">
-                    {#if tier["type"] == "paid"}
-                      <span class="font-semibold">{format_price(tier["monthly_price"], tier["currency"])}</span>
-                      <span class="text-xs text-muted">/{l("mo")}</span>
-                    {#else}
-                      <span class="font-semibold">{l("Free")}</span>
+            <div class="divide-hair divide-secondary mt-6">
+              {#for tier <- @tiers}
+                <div class={
+                  "py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-4",
+                  "opacity-60": !tier["active"]
+                }>
+                  <div class="flex items-center gap-2 flex-wrap min-w-0">
+                    <h4 class="font-medium">{tier["name"]}</h4>
+                    {#if !tier["active"]}
+                      <span class="badge badge-xs badge-warning">{l("archived")}</span>
+                    {/if}
+                    {#if tier["visibility"] == "none"}
+                      <span class="badge badge-xs badge-ghost">{l("hidden")}</span>
                     {/if}
                   </div>
 
-                  {#if @gated_login}
-                    <form phx-change="Bonfire.Common.Settings:set">
-                      <Bonfire.UI.Common.SettingsToggleLive
-                        keys={[:bonfire_ghost, :required_tier, tier["slug"]]}
-                        scope={:instance}
-                        name={l("Required")}
-                        compact
-                      />
-                    </form>
-                  {/if}
+                  <div class="flex items-center gap-4 shrink-0">
+                    <div class="text-right">
+                      {#if tier["type"] == "paid"}
+                        <span class="font-semibold">{format_price(tier["monthly_price"], tier["currency"])}</span>
+                        <span class="text-xs text-muted">/{l("mo")}</span>
+                      {#else}
+                        <span class="font-semibold">{l("Free")}</span>
+                      {/if}
+                    </div>
+
+                    {#if @gated_login}
+                      <form phx-change="Bonfire.Common.Settings:set">
+                        <Bonfire.UI.Common.SettingsToggleLive
+                          keys={[:bonfire_ghost, :required_tier, tier["slug"]]}
+                          scope={:instance}
+                          name={l("Required")}
+                          compact
+                        />
+                      </form>
+                    {/if}
+                  </div>
                 </div>
-              </div>
-            {/for}
+              {/for}
+            </div>
           </div>
-        </div>
-      </section>
-    {/if}
+        </section>
+      {/if}
 
-    {!-- Members (collapsed by default; heaviest DOM, rarest task — header + count + Sync stay visible) --}
-    {#if Bonfire.Ghost.admin_configured?()}
-      <section x-data="{expanded: false}" class="rounded-box border border-base-content/10 bg-base-100">
-        <div class="flex items-center justify-between gap-3 p-4">
-          <h3 class="min-w-0">
+      {!-- Members (collapsed by default; heaviest DOM, rarest task — header + count + Sync stay visible) --}
+      {#if Bonfire.Ghost.admin_configured?()}
+        <section x-data="{expanded: false}" class="rounded-box border border-base-content/10 bg-base-100">
+          <div class="flex items-center justify-between gap-3 p-4">
+            <h3 class="min-w-0">
+              <button
+                id="ghost-members-toggle"
+                type="button"
+                x-on:click="expanded = !expanded"
+                class="flex items-center gap-2 font-semibold text-base"
+              >
+                <#Icon iconify="ph:users" class="w-5 h-5 text-muted" />
+                {l("Members")}
+                {#if @page_info}
+                  <span class="badge badge-sm badge-ghost">{@page_info.total}</span>
+                {/if}
+                <span class="transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
+                  <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+                </span>
+              </button>
+            </h3>
             <button
-              id="ghost-members-toggle"
-              type="button"
-              x-on:click="expanded = !expanded"
-              class="flex items-center gap-2 font-semibold text-base"
+              id="ghost-sync-members"
+              class="btn btn-primary btn-sm gap-2"
+              phx-click="Bonfire.Ghost:sync_members"
+              phx-target={@myself}
+              data-confirm={l(
+                "Backfill members from Ghost? This runs a background job that provisions accounts and adds existing members to their tier circles."
+              )}
             >
-              <#Icon iconify="ph:users" class="w-5 h-5 text-muted" />
-              {l("Members")}
-              {#if @page_info}
-                <span class="badge badge-sm badge-ghost">{@page_info.total}</span>
-              {/if}
-              <span class="transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                <#Icon iconify="ph:caret-down" class="w-4 h-4" />
-              </span>
+              <#Icon iconify="ph:arrows-clockwise" class="w-4 h-4" />
+              {l("Sync members")}
             </button>
-          </h3>
-          <button
-            id="ghost-sync-members"
-            class="btn btn-primary btn-sm gap-2"
-            phx-click="Bonfire.Ghost:sync_members"
-            phx-target={@myself}
-            data-confirm={l(
-              "Backfill members from Ghost? This runs a background job that provisions accounts and adds existing members to their tier circles."
-            )}
-          >
-            <#Icon iconify="ph:arrows-clockwise" class="w-4 h-4" />
-            {l("Sync members")}
-          </button>
-        </div>
+          </div>
 
-        <div x-show="expanded" x-collapse x-cloak class="px-4 pb-4">
-          <p class="text-sm text-muted mb-4">
-            {l(
-              "Run a one-off backfill after syncing tiers. Webhooks and Ghost sign-in keep future changes in sync."
-            )}
-          </p>
+          <div x-show="expanded" x-collapse x-cloak class="px-4 pb-4">
+            <p class="text-sm text-muted mb-4">
+              {l(
+                "Run a one-off backfill after syncing tiers. Webhooks and Ghost sign-in keep future changes in sync."
+              )}
+            </p>
 
-          {#if @members == []}
-            <div class="text-center py-8 text-muted">
-              <#Icon iconify="ph:users" class="w-10 h-10 mb-2" />
-              <p>{l("No members yet. Sync to pull them from Ghost.")}</p>
-            </div>
-          {#else}
-            <div class="overflow-x-auto">
-              <table class="table table-zebra w-full">
-                <thead>
-                  <tr>
-                    <th>{l("Email")}</th>
-                    <th>{l("Name")}</th>
-                    <th>{l("Status")}</th>
-                    <th>{l("Subscribed")}</th>
-                    <th>{l("Joined")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#for member <- @members}
-                    <tr>
-                      <td><span class="font-mono text-sm">{member["email"]}</span></td>
-                      <td>{member["name"] || "-"}</td>
-                      <td>
-                        <span class={"badge badge-sm #{status_badge_class(member["status"])}"}>{member["status"]}</span>
-                      </td>
-                      <td>
-                        {#if member["subscribed"]}
-                          <#Icon iconify="ph:check-circle-fill" class="w-5 h-5 text-success" />
-                        {#else}
-                          <#Icon iconify="ph:x-circle-fill" class="w-5 h-5 text-muted" />
-                        {/if}
-                      </td>
-                      <td class="text-sm text-muted">{format_date(member["created_at"])}</td>
-                    </tr>
-                  {/for}
-                </tbody>
-              </table>
-            </div>
-
-            {#if @page_info && @page_info.has_next}
-              <div class="flex justify-center mt-4">
-                <button
-                  id="ghost-members-load-more"
-                  class="btn btn-ds-outline btn-sm"
-                  phx-click="Bonfire.Ghost:load_more"
-                  phx-target={@myself}
-                >
-                  {l("Load more")}
-                </button>
+            {#if @members == []}
+              <div class="text-center py-8 text-muted">
+                <#Icon iconify="ph:users" class="w-10 h-10 mb-2" />
+                <p>{l("No members yet. Sync to pull them from Ghost.")}</p>
               </div>
+            {#else}
+              <div class="overflow-x-auto">
+                <table class="table table-zebra w-full">
+                  <thead>
+                    <tr>
+                      <th>{l("Email")}</th>
+                      <th>{l("Name")}</th>
+                      <th>{l("Status")}</th>
+                      <th>{l("Subscribed")}</th>
+                      <th>{l("Joined")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#for member <- @members}
+                      <tr>
+                        <td><span class="font-mono text-sm">{member["email"]}</span></td>
+                        <td>{member["name"] || "-"}</td>
+                        <td>
+                          <span class={"badge badge-sm #{status_badge_class(member["status"])}"}>{member["status"]}</span>
+                        </td>
+                        <td>
+                          {#if member["subscribed"]}
+                            <#Icon iconify="ph:check-circle-fill" class="w-5 h-5 text-success" />
+                          {#else}
+                            <#Icon iconify="ph:x-circle-fill" class="w-5 h-5 text-muted" />
+                          {/if}
+                        </td>
+                        <td class="text-sm text-muted">{format_date(member["created_at"])}</td>
+                      </tr>
+                    {/for}
+                  </tbody>
+                </table>
+              </div>
+
+              {#if @page_info && @page_info.has_next}
+                <div class="flex justify-center mt-4">
+                  <button
+                    id="ghost-members-load-more"
+                    class="btn btn-ds-outline btn-sm"
+                    phx-click="Bonfire.Ghost:load_more"
+                    phx-target={@myself}
+                  >
+                    {l("Load more")}
+                  </button>
+                </div>
+              {/if}
             {/if}
+          </div>
+        </section>
+      {#else}
+        <div class="rounded-box border border-base-content/10 bg-base-100 p-4 flex items-start gap-3">
+          <#Icon iconify="ph:info" class="w-5 h-5 text-muted shrink-0" />
+          <div>
+            <h3 class="font-medium">{l("Members & gated login unavailable")}</h3>
+            <p class="text-sm text-muted">{l("Set GHOST_ADMIN_API_KEY to sync members and enable gated login.")}</p>
+          </div>
+        </div>
+      {/if}
+
+      {!-- Blog details (collapsed; reference data) --}
+      <section x-data="{expanded: false}" class="rounded-box border border-base-content/10 bg-base-100">
+        <h3>
+          <button
+            id="ghost-blog-details-toggle"
+            type="button"
+            x-on:click="expanded = !expanded"
+            class="w-full flex items-center gap-2 p-4 font-semibold text-base"
+          >
+            <#Icon iconify="ph:info" class="w-5 h-5 text-muted" />
+            {l("Blog details")}
+            <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
+              <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+            </span>
+          </button>
+        </h3>
+
+        <div x-show="expanded" x-collapse x-cloak>
+          {#if cover_image = @settings["cover_image"]}
+            <figure class="h-32 overflow-hidden border-y border-base-content/10">
+              <img src={cover_image} alt="" class="w-full object-cover">
+            </figure>
           {/if}
-        </div>
-      </section>
-    {#else}
-      <div class="rounded-box border border-base-content/10 bg-base-100 p-4 flex items-start gap-3">
-        <#Icon iconify="ph:info" class="w-5 h-5 text-muted shrink-0" />
-        <div>
-          <h3 class="font-medium">{l("Members & gated login unavailable")}</h3>
-          <p class="text-sm text-muted">{l("Set GHOST_ADMIN_API_KEY to sync members and enable gated login.")}</p>
-        </div>
-      </div>
-    {/if}
-
-    {!-- Blog details (collapsed; reference data) --}
-    <section x-data="{expanded: false}" class="rounded-box border border-base-content/10 bg-base-100">
-      <h3>
-        <button
-          id="ghost-blog-details-toggle"
-          type="button"
-          x-on:click="expanded = !expanded"
-          class="w-full flex items-center gap-2 p-4 font-semibold text-base"
-        >
-          <#Icon iconify="ph:info" class="w-5 h-5 text-muted" />
-          {l("Blog details")}
-          <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-            <#Icon iconify="ph:caret-down" class="w-4 h-4" />
-          </span>
-        </button>
-      </h3>
-
-      <div x-show="expanded" x-collapse x-cloak>
-        {#if cover_image = @settings["cover_image"]}
-          <figure class="h-32 overflow-hidden border-y border-base-content/10">
-            <img src={cover_image} alt="" class="w-full object-cover">
-          </figure>
-        {/if}
-        <div class="p-4 space-y-4">
-          <p :if={desc = @settings["description"]} class="text-sm text-muted">{desc}</p>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div>
-              <span class="text-muted">{l("Language")}</span>
-              <p class="font-medium">{@settings["locale"] || @settings["lang"] || "-"}</p>
-            </div>
-            <div>
-              <span class="text-muted">{l("Timezone")}</span>
-              <p class="font-medium">{@settings["timezone"] || "-"}</p>
-            </div>
-            <div>
-              <span class="text-muted">{l("Members")}</span>
-              <p class="font-medium">
-                {#if @settings["members_enabled"]}
-                  <span class="text-success">{l("Enabled")}</span>
-                {#else}
-                  <span class="text-muted">{l("Disabled")}</span>
-                {/if}
-              </p>
-            </div>
-            <div>
-              <span class="text-muted">{l("Paid tiers")}</span>
-              <p class="font-medium">
-                {#if @settings["paid_members_enabled"]}
-                  <span class="text-success">{l("Enabled")}</span>
-                {#else}
-                  <span class="text-muted">{l("Disabled")}</span>
-                {/if}
-              </p>
+          <div class="p-4 space-y-4">
+            <p :if={desc = @settings["description"]} class="text-sm text-muted">{desc}</p>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div>
+                <span class="text-muted">{l("Language")}</span>
+                <p class="font-medium">{@settings["locale"] || @settings["lang"] || "-"}</p>
+              </div>
+              <div>
+                <span class="text-muted">{l("Timezone")}</span>
+                <p class="font-medium">{@settings["timezone"] || "-"}</p>
+              </div>
+              <div>
+                <span class="text-muted">{l("Members")}</span>
+                <p class="font-medium">
+                  {#if @settings["members_enabled"]}
+                    <span class="text-success">{l("Enabled")}</span>
+                  {#else}
+                    <span class="text-muted">{l("Disabled")}</span>
+                  {/if}
+                </p>
+              </div>
+              <div>
+                <span class="text-muted">{l("Paid tiers")}</span>
+                <p class="font-medium">
+                  {#if @settings["paid_members_enabled"]}
+                    <span class="text-success">{l("Enabled")}</span>
+                  {#else}
+                    <span class="text-muted">{l("Disabled")}</span>
+                  {/if}
+                </p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </section>
-  {/if}
+      </section>
+    {/if}
 
-  {!-- Error Display --}
-  {#if @error}
-    <div class="alert alert-error">
-      <#Icon iconify="ph:warning-circle" class="w-5 h-5" />
-      <div>
-        <h3 class="font-bold">{l("Error")}</h3>
-        <p class="text-sm">{inspect(@error)}</p>
+    {!-- Error Display --}
+    {#if @error}
+      <div class="alert alert-error">
+        <#Icon iconify="ph:warning-circle" class="w-5 h-5" />
+        <div>
+          <h3 class="font-bold">{l("Error")}</h3>
+          <p class="text-sm">{inspect(@error)}</p>
+        </div>
       </div>
-    </div>
-  {/if}
+    {/if}
   {/if}
 </div>
