@@ -61,15 +61,20 @@ defmodule Bonfire.Ghost.Sync.Articles do
   """
   @spec sync_all(keyword()) :: {:ok, sync_summary()} | {:error, term()}
   def sync_all(opts \\ []) do
+    # Resume an interrupted sweep instead of redoing every already-imported article:
+    # if the last run stopped mid-way (an Oban retry after a page-fetch failure, a node
+    # restart, etc.), pick up from the page it reached and carry its counts forward.
+    {start_page, start_summary} = resume_point(opts)
+
     cond do
       Ghost.admin_configured?() ->
-        with_status_tracking(fn ->
-          paginate_and_import(&fetch_admin_page/1, 1, @empty_summary, opts)
+        with_status_tracking(start_page, start_summary, fn ->
+          paginate_and_import(&fetch_admin_page/1, start_page, start_summary, opts)
         end)
 
       Ghost.configured?() ->
-        with_status_tracking(fn ->
-          paginate_and_import(&fetch_content_page/1, 1, @empty_summary, opts)
+        with_status_tracking(start_page, start_summary, fn ->
+          paginate_and_import(&fetch_content_page/1, start_page, start_summary, opts)
         end)
 
       true ->
@@ -82,6 +87,29 @@ defmodule Bonfire.Ghost.Sync.Articles do
         {:error, :not_configured}
     end
   end
+
+  # Where to (re)start the sweep. A prior run left in a non-terminal-success state with a
+  # page past the first means it was interrupted — resume there (re-doing the current page
+  # is safe, since imports upsert). Anything else (no prior run, or a completed one) starts
+  # fresh at page 1. `restart: true` forces a clean full sweep.
+  defp resume_point(opts) do
+    with false <- Keyword.get(opts, :restart, false),
+         %{state: state, page: page} = prior when state in [:running, :retrying, :failed] <-
+           status(),
+         true <- is_integer(page) and page > 1 do
+      info(page, "Resuming interrupted Ghost article backfill from page")
+
+      # Carry the progress counters forward so the UI keeps counting up instead of
+      # snapping back to 0; the per-article error list restarts for this leg (the prior
+      # errors were already capped and logged), but the running counts continue.
+      {page,
+       %{@empty_summary | synced: prior_count(prior, :synced), filtered: prior_count(prior, :filtered)}}
+    else
+      _ -> {1, @empty_summary}
+    end
+  end
+
+  defp prior_count(status, key), do: Map.get(status, key) || 0
 
   @doc """
   Current backfill status for the settings UI, or nil when none ran recently.
@@ -119,13 +147,13 @@ defmodule Bonfire.Ghost.Sync.Articles do
   def format_reason(reason) when is_atom(reason), do: to_string(reason)
   def format_reason(reason), do: reason |> inspect() |> String.slice(0, 500)
 
-  defp with_status_tracking(fun) do
+  defp with_status_tracking(start_page, start_summary, fun) do
     put_status(%{
       state: :running,
       started_at: DateTime.utc_now(),
-      page: 1,
-      synced: 0,
-      filtered: 0,
+      page: start_page,
+      synced: start_summary.synced,
+      filtered: start_summary.filtered,
       errors_count: 0,
       errors: []
     })

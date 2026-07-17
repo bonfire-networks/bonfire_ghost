@@ -264,4 +264,88 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       assert length(stored) == 20
     end
   end
+
+  describe "resume (never restart an interrupted sweep from page 1)" do
+    test "resumes from the page the previous interrupted run reached, carrying counts forward" do
+      test_pid = self()
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
+        {:ok, :post}
+      end)
+
+      # A prior attempt got interrupted mid-sweep: it had reached page 3 with 120 done.
+      Articles.put_status(%{
+        state: :failed,
+        reason: "nxdomain",
+        page: 3,
+        synced: 120,
+        filtered: 5,
+        errors_count: 0,
+        errors: []
+      })
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
+        page = Keyword.fetch!(opts, :page)
+        send(test_pid, {:fetched_page, page})
+
+        case page do
+          3 -> page([post("c1")], 4)
+          4 -> page([post("d1")], nil)
+        end
+      end)
+
+      assert {:ok, summary} = Articles.sync_all()
+
+      # It picked up at page 3 — pages 1 and 2 were never re-fetched.
+      assert_receive {:fetched_page, 3}
+      assert_receive {:fetched_page, 4}
+      refute_received {:fetched_page, 1}
+      refute_received {:fetched_page, 2}
+
+      # Counts continue from the prior run (120 + the 2 newly imported), not from 0.
+      assert summary.synced == 122
+      assert summary.filtered == 5
+      assert %{state: :done, synced: 122, filtered: 5} = Articles.status()
+    end
+
+    test "starts fresh (page 1) after a previous run finished cleanly" do
+      test_pid = self()
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
+        {:ok, :post}
+      end)
+
+      Articles.put_status(%{state: :done, page: 9, synced: 400, filtered: 0, errors: []})
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
+        send(test_pid, {:fetched_page, Keyword.fetch!(opts, :page)})
+        page([post("a")], nil)
+      end)
+
+      assert {:ok, %{synced: 1}} = Articles.sync_all()
+      assert_receive {:fetched_page, 1}
+    end
+
+    test "`restart: true` forces a clean full sweep even after an interrupted run" do
+      test_pid = self()
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
+        {:ok, :post}
+      end)
+
+      Articles.put_status(%{state: :failed, page: 5, synced: 200, filtered: 0, errors: []})
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
+        send(test_pid, {:fetched_page, Keyword.fetch!(opts, :page)})
+        page([post("a")], nil)
+      end)
+
+      assert {:ok, %{synced: 1}} = Articles.sync_all(restart: true)
+      assert_receive {:fetched_page, 1}
+    end
+  end
 end
