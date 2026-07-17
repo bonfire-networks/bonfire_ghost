@@ -18,6 +18,9 @@ defmodule Bonfire.Ghost.Sync.Articles do
   import Untangle
 
   alias Bonfire.Common.Cache
+  alias Bonfire.Common.Config
+  # Config.get/2 is a macro
+  require Config
   alias Bonfire.Ghost
   alias Bonfire.Ghost.API
   alias Bonfire.Ghost.AdminAPI
@@ -32,6 +35,12 @@ defmodule Bonfire.Ghost.Sync.Articles do
   @status_ttl 1_000 * 60 * 60 * 24 * 7
   # The status is rewritten after every article, so cap the error detail we carry along.
   @max_stored_errors 20
+
+  # Watchdog for a single article import: Oban's `perform` has no timeout of its own, so
+  # without this one blocked import (stuck HTTP pool checkout, DB lock, slow search
+  # indexing…) would freeze the whole backfill forever while the status panel silently
+  # stops moving. Seen in production: a 2500-article backfill stuck mid-page for 30+ min.
+  @default_import_timeout :timer.minutes(2)
 
   @type sync_summary :: %{
           synced: non_neg_integer(),
@@ -79,13 +88,22 @@ defmodule Bonfire.Ghost.Sync.Articles do
 
   A map with `:state` (`:queued` | `:running` | `:retrying` | `:done` | `:failed`) plus
   progress counters (`:page`, `:synced`, `:filtered`, `:errors_count`), a capped
-  `:errors` list of `%{article: label, reason: string}`, timestamps, and — when set by
-  the Oban worker after a failed attempt — `:reason`, `:attempt` and `:max_attempts`.
+  `:errors` list of `%{article: label, reason: string}`, the `:current` article label,
+  timestamps (including the `:updated_at` heartbeat — see `put_status/1`), and — when
+  set by the Oban worker after a failed attempt — `:reason`, `:attempt` and
+  `:max_attempts`.
   """
   def status, do: Cache.get!(@status_cache_key)
 
-  @doc "Overwrites the backfill status shown on the settings page. Returns the map."
+  @doc """
+  Overwrites the backfill status shown on the settings page. Returns the map.
+
+  Every write also stamps `:updated_at`, which the settings UI uses as a heartbeat: an
+  in-flight status whose heartbeat is minutes old means the job died or hung, so the UI
+  can say so (and re-enable the sync button) instead of showing a spinner forever.
+  """
   def put_status(map) when is_map(map) do
+    map = Map.put(map, :updated_at, DateTime.utc_now())
     # `async: false`: status updates are read-modify-write and must land in order —
     # the default fire-and-forget put could apply a stale :running over the final :done.
     Cache.put(@status_cache_key, map, expire: @status_ttl, async: false)
@@ -224,22 +242,58 @@ defmodule Bonfire.Ghost.Sync.Articles do
   end
 
   defp import_one(post, summary, opts) do
-    case EmbedHelper.import_article(post, opts) do
-      {:ok, :filtered_out} ->
-        %{summary | filtered: summary.filtered + 1}
+    label = article_label(post)
+    # Recording which article is being imported *before* importing it means that even if
+    # everything below wedges, the status panel names the culprit article.
+    report_progress_extra(%{current: label})
 
-      {:ok, _post} ->
+    timeout = import_timeout()
+    task = Task.async(fn -> try_import(post, opts) end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, :synced} ->
         %{summary | synced: summary.synced + 1}
 
-      {:error, reason} ->
-        %{summary | errors: [{article_label(post), reason} | summary.errors]}
+      {:ok, :filtered} ->
+        %{summary | filtered: summary.filtered + 1}
+
+      {:ok, {:error, reason}} ->
+        %{summary | errors: [{label, reason} | summary.errors]}
+
+      # nil (timed out, killed) or {:exit, _} — record it as a per-article error and move
+      # on, rather than letting one stuck article freeze the whole backfill.
+      other ->
+        warn(
+          %{article: label, result: other, timeout: timeout},
+          "Ghost article import timed out or crashed — skipping this article and continuing"
+        )
+
+        %{summary | errors: [{label, "import timed out after #{div(timeout, 1000)}s"} | summary.errors]}
     end
     |> report_progress()
+  end
+
+  # Runs inside the watchdog Task; must never crash (a crash of a linked Task would take
+  # the whole backfill down with it), so every failure becomes an `{:error, reason}` value.
+  defp try_import(post, opts) do
+    case EmbedHelper.import_article(post, opts) do
+      {:ok, :filtered_out} -> :filtered
+      {:ok, _post} -> :synced
+      {:error, reason} -> {:error, reason}
+      other -> {:error, other}
+    end
   rescue
     e ->
       warn(e, "Failed to import a Ghost article during backfill")
-      report_progress(%{summary | errors: [{article_label(post), e} | summary.errors]})
+      {:error, e}
+  catch
+    kind, reason ->
+      warn({kind, reason}, "Failed to import a Ghost article during backfill")
+      {:error, {kind, reason}}
   end
+
+  defp import_timeout,
+    do: Config.get([:bonfire_ghost, :article_import_timeout], @default_import_timeout)
 
   defp article_label(post), do: post["url"] || post["slug"] || post["id"] || "?"
 

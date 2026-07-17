@@ -123,12 +123,38 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
     socket
   end
 
+  # The backfill's watchdog guarantees a status write at least every ~2 min while the job
+  # is alive (see Bonfire.Ghost.Sync.Articles), so a heartbeat this old means the job
+  # died or hung without ever reaching a terminal state.
+  @sync_stall_after_ms :timer.minutes(5)
+
   @doc "State atom of the article backfill status map (nil when none)."
   def sync_state(%{state: state}), do: state
   def sync_state(_), do: nil
 
   @doc "Whether an article backfill is queued, running, or about to be retried."
   def sync_in_flight?(status), do: sync_state(status) in [:queued, :running, :retrying]
+
+  @doc """
+  Whether an in-flight backfill has stopped writing its heartbeat (job died or hung).
+
+  When true the UI warns and re-enables the sync button: re-clicking either restarts the
+  import (the `ghost_webhooks` queue runs 2 jobs, so a wedged one can't block a fresh
+  one) or — if the old job is genuinely still executing and recent — Oban's uniqueness
+  reports "already running" instead.
+  """
+  def sync_stalled?(status) do
+    sync_in_flight?(status) and
+      case Map.get(status, :updated_at) do
+        %DateTime{} = dt ->
+          DateTime.diff(DateTime.utc_now(), dt, :millisecond) > @sync_stall_after_ms
+
+        # Statuses written before the heartbeat existed (or malformed) count as stalled
+        # rather than pinning the button disabled forever.
+        _ ->
+          true
+      end
+  end
 
   @doc "A counter from the status map, defaulting to 0."
   def sync_count(status, key) when is_map(status), do: Map.get(status, key) || 0

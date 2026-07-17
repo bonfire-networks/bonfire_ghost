@@ -76,4 +76,39 @@ defmodule Bonfire.Ghost.Web.GhostSettingsSyncPollTest do
 
     refute Map.has_key?(socket.assigns, :article_sync_status)
   end
+
+  describe "sync_stalled?/1 (heartbeat watchdog for the settings UI)" do
+    test "a fresh in-flight status is not stalled" do
+      status = Articles.put_status(%{state: :running, synced: 1})
+
+      refute GhostSettingsLive.sync_stalled?(status)
+    end
+
+    test "an in-flight status whose heartbeat is old means the job died or hung" do
+      status = %{state: :running, synced: 1, updated_at: DateTime.add(DateTime.utc_now(), -10, :minute)}
+
+      assert GhostSettingsLive.sync_stalled?(status)
+
+      # same for a job stuck in the queue
+      assert GhostSettingsLive.sync_stalled?(%{status | state: :queued})
+    end
+
+    test "an in-flight status without a heartbeat counts as stalled rather than pinning the button disabled" do
+      assert GhostSettingsLive.sync_stalled?(%{state: :running, synced: 1})
+    end
+
+    test "terminal or missing statuses are never stalled" do
+      refute GhostSettingsLive.sync_stalled?(nil)
+
+      refute GhostSettingsLive.sync_stalled?(%{
+               state: :done,
+               updated_at: DateTime.add(DateTime.utc_now(), -10, :minute)
+             })
+
+      refute GhostSettingsLive.sync_stalled?(%{
+               state: :failed,
+               updated_at: DateTime.add(DateTime.utc_now(), -10, :minute)
+             })
+    end
+  end
 end

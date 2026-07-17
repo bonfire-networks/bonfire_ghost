@@ -238,7 +238,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   {l("Backfill articles published before webhooks were set up. Re-running is safe.")}
                 </div>
               </div>
-              {#if sync_in_flight?(@article_sync_status)}
+              {#if sync_in_flight?(@article_sync_status) and not sync_stalled?(@article_sync_status)}
                 <button id="ghost-sync-articles" class="btn btn-primary btn-sm gap-2" disabled>
                   <span class="loading loading-spinner w-4 h-4" />
                   {l("Importing…")}
@@ -272,6 +272,15 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                     <span class="loading loading-spinner w-4 h-4" />
                     <span>{l("Import queued — waiting for a background worker to pick it up…")}</span>
                   </div>
+                  {#if sync_stalled?(@article_sync_status)}
+                    <div class="flex items-start gap-2 text-warning">
+                      <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>{l(
+                          "Still not picked up since %{date} — the background worker may be down or its queue full. Check the server logs, or use the button above to queue it again.",
+                          date: format_time_ago(@article_sync_status[:updated_at])
+                        )}</span>
+                    </div>
+                  {/if}
                 {#elseif sync_state(@article_sync_status) in [:running, :retrying]}
                   <div class="flex items-center gap-2">
                     <span class="loading loading-spinner w-4 h-4" />
@@ -284,6 +293,20 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                     · {l("%{count} skipped by tag filter", count: sync_count(@article_sync_status, :filtered))}
                     · {l("%{count} failed", count: sync_count(@article_sync_status, :errors_count))}
                   </div>
+                  {#if @article_sync_status[:current]}
+                    <div class="text-muted break-all">
+                      {l("Currently importing: %{article}", article: @article_sync_status[:current])}
+                    </div>
+                  {/if}
+                  {#if sync_stalled?(@article_sync_status)}
+                    <div class="flex items-start gap-2 text-warning">
+                      <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>{l(
+                          "No progress since %{date} — the import appears to be stuck, likely on the article shown above. Check the server logs, then use the button above to start it again (already-imported articles are simply updated).",
+                          date: format_time_ago(@article_sync_status[:updated_at])
+                        )}</span>
+                    </div>
+                  {/if}
                   {#if sync_state(@article_sync_status) == :retrying}
                     <div class="flex items-center gap-2 text-warning">
                       <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0" />
