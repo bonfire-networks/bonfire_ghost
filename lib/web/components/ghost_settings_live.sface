@@ -238,19 +238,111 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   {l("Backfill articles published before webhooks were set up. Re-running is safe.")}
                 </div>
               </div>
-              <button
-                id="ghost-sync-articles"
-                class="btn btn-primary btn-sm gap-2"
-                phx-click="Bonfire.Ghost:sync_articles"
-                phx-target={@myself}
-                data-confirm={l(
-                  "Import every published article from this Ghost blog? This can create a large number of posts in the background. It's safe to re-run, but only start it once."
-                )}
-              >
-                <#Icon iconify="ph:download-simple" class="w-4 h-4" />
-                {l("Sync articles")}
-              </button>
+              {#if sync_in_flight?(@article_sync_status)}
+                <button id="ghost-sync-articles" class="btn btn-primary btn-sm gap-2" disabled>
+                  <span class="loading loading-spinner w-4 h-4" />
+                  {l("Importing…")}
+                </button>
+              {#else}
+                <button
+                  id="ghost-sync-articles"
+                  class="btn btn-primary btn-sm gap-2"
+                  phx-click="Bonfire.Ghost:sync_articles"
+                  phx-target={@myself}
+                  data-confirm={l(
+                    "Import every published article from this Ghost blog? This can create a large number of posts in the background. It's safe to re-run, but only start it once."
+                  )}
+                >
+                  <#Icon iconify="ph:download-simple" class="w-4 h-4" />
+                  {l("Sync articles")}
+                </button>
+              {/if}
             </div>
+
+            {!-- Live status of the background backfill: the worker writes progress to the
+               cache after every article and this panel polls it every 2s while running,
+               so imports are no longer a black box that only reports to server logs. --}
+            {#if @article_sync_status}
+              <div
+                id="ghost-article-sync-status"
+                class="rounded-box border border-secondary bg-base-200/40 p-3 text-sm space-y-2"
+              >
+                {#if sync_state(@article_sync_status) == :queued}
+                  <div class="flex items-center gap-2">
+                    <span class="loading loading-spinner w-4 h-4" />
+                    <span>{l("Import queued — waiting for a background worker to pick it up…")}</span>
+                  </div>
+                {#elseif sync_state(@article_sync_status) in [:running, :retrying]}
+                  <div class="flex items-center gap-2">
+                    <span class="loading loading-spinner w-4 h-4" />
+                    <span>{l("Importing articles from Ghost (page %{page})…",
+                        page: max(sync_count(@article_sync_status, :page), 1)
+                      )}</span>
+                  </div>
+                  <div class="text-muted tabular-nums">
+                    {l("%{count} imported", count: sync_count(@article_sync_status, :synced))}
+                    · {l("%{count} skipped by tag filter", count: sync_count(@article_sync_status, :filtered))}
+                    · {l("%{count} failed", count: sync_count(@article_sync_status, :errors_count))}
+                  </div>
+                  {#if sync_state(@article_sync_status) == :retrying}
+                    <div class="flex items-center gap-2 text-warning">
+                      <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0" />
+                      <span>{l("Fetching from Ghost failed (%{reason}) — retrying automatically (attempt %{attempt} of %{max})…",
+                          reason: @article_sync_status[:reason] || "?",
+                          attempt: @article_sync_status[:attempt] || 1,
+                          max: @article_sync_status[:max_attempts] || "?"
+                        )}</span>
+                    </div>
+                  {/if}
+                {#elseif sync_state(@article_sync_status) == :done}
+                  <div class="flex items-center gap-2 text-success">
+                    <#Icon iconify="ph:check-circle" class="w-4 h-4 shrink-0" />
+                    <span>{l("Import finished %{date}", date: format_time_ago(@article_sync_status[:finished_at]))}</span>
+                  </div>
+                  <div class="text-muted tabular-nums">
+                    {l("%{count} imported", count: sync_count(@article_sync_status, :synced))}
+                    · {l("%{count} skipped by tag filter", count: sync_count(@article_sync_status, :filtered))}
+                    · {l("%{count} failed", count: sync_count(@article_sync_status, :errors_count))}
+                  </div>
+                {#elseif sync_state(@article_sync_status) == :failed}
+                  <div class="flex items-center gap-2 text-error">
+                    <#Icon iconify="ph:x-circle" class="w-4 h-4 shrink-0" />
+                    <span class="break-all">{l("Import failed: %{reason}",
+                        reason: @article_sync_status[:reason] || l("unknown error")
+                      )}</span>
+                  </div>
+                  <div class="text-muted tabular-nums">
+                    {l("Progress before the failure:")}
+                    {l("%{count} imported", count: sync_count(@article_sync_status, :synced))}
+                    · {l("%{count} skipped by tag filter", count: sync_count(@article_sync_status, :filtered))}
+                    · {l("%{count} failed", count: sync_count(@article_sync_status, :errors_count))}
+                  </div>
+                {/if}
+
+                {#if sync_errors(@article_sync_status) != []}
+                  <details>
+                    <summary class="cursor-pointer text-warning">
+                      {l("%{count} article(s) could not be imported — show details",
+                        count: sync_count(@article_sync_status, :errors_count)
+                      )}
+                    </summary>
+                    <ul class="mt-1 space-y-1 list-disc list-inside">
+                      {#for err <- sync_errors(@article_sync_status)}
+                        <li class="break-all">
+                          <span class="font-medium">{err[:article]}</span>
+                          <span class="text-muted">— {err[:reason]}</span>
+                        </li>
+                      {/for}
+                      {#if sync_count(@article_sync_status, :errors_count) > length(sync_errors(@article_sync_status))}
+                        <li class="text-muted">{l("…only the %{count} most recent errors are kept — see server logs for the full list.",
+                            count: length(sync_errors(@article_sync_status))
+                          )}</li>
+                      {/if}
+                    </ul>
+                  </details>
+                {/if}
+              </div>
+            {/if}
           </div>
         </section>
       {/if}

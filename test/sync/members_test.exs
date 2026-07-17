@@ -512,4 +512,126 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       assert {:ok, %{provisioned: 1, errors: []}} = Members.sync_all()
     end
   end
+
+  # a Ghost staff payload — note there is NO "tiers" key at all
+  defp staff(email, opts \\ []) do
+    %{
+      "id" => Keyword.get(opts, :id, "ghost_staff_#{email}"),
+      "email" => email,
+      "name" => Keyword.get(opts, :name, "Ghost Staffer"),
+      "slug" => Keyword.get(opts, :slug, "ghost-staffer"),
+      "status" => Keyword.get(opts, :status, "active"),
+      "roles" => [%{"name" => Keyword.get(opts, :role, "Editor")}]
+    }
+  end
+
+  describe "sync_all_staff/1 backfill (account-only)" do
+    test "provisions all paginated Ghost staff into ACCOUNTS (no user/circles)" do
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
+
+      Repatch.patch(AdminAPI, :list_users, fn :ghost_client, opts ->
+        # suspended/locked staff are excluded server-side — the filter must always be sent
+        assert Keyword.fetch!(opts, :filter) == AdminAPI.active_staff_filter()
+
+        case Keyword.fetch!(opts, :page) do
+          1 ->
+            {:ok,
+             %{
+               "users" => [staff("editor-backfill@test.local")],
+               "meta" => %{"pagination" => %{"page" => 1, "next" => 2}}
+             }}
+
+          2 ->
+            {:ok,
+             %{
+               "users" => [staff("contributor-backfill@test.local", role: "Contributor")],
+               "meta" => %{"pagination" => %{"page" => 2, "next" => nil}}
+             }}
+        end
+      end)
+
+      assert {:ok, %{provisioned: 2, errors: []}} = Members.sync_all_staff()
+
+      assert %{} = editor_account = Accounts.get_by_email("editor-backfill@test.local")
+      assert %{} = Accounts.get_by_email("contributor-backfill@test.local")
+      # account-only: staff pick their own handle at /create-user, like members
+      assert Users.by_account!(editor_account) == []
+    end
+
+    test "a staffer with an existing profile keeps their ghost_tier circles (no wipe, no member lookup)" do
+      setup_tiers([@tier_paid])
+
+      # a staffer who is ALSO a paying member and already created their profile
+      {:ok, user} =
+        Members.provision_from_ghost_member(
+          member("staffpaid@test.local", tiers: [@tier_paid]),
+          create_user: true
+        )
+
+      assert Circles.is_encircled_by?(user, tier_circle("paid"))
+
+      test_pid = self()
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
+
+      Repatch.patch(AdminAPI, :list_users, fn :ghost_client, _opts ->
+        {:ok,
+         %{
+           "users" => [staff("staffpaid@test.local")],
+           "meta" => %{"pagination" => %{"page" => 1, "next" => nil}}
+         }}
+      end)
+
+      # reconcile is skipped outright (reconcile_tiers: false) — a tiers-less staff payload
+      # must neither wipe circles nor cost an authoritative member-tier lookup per staffer
+      Repatch.patch(AdminAPI, :get_member_by_email, fn _c, _e, _o ->
+        send(test_pid, :member_lookup)
+        {:ok, %{"members" => []}}
+      end)
+
+      assert {:ok, %{provisioned: 1, errors: []}} = Members.sync_all_staff()
+
+      assert Circles.is_encircled_by?(user, tier_circle("paid"))
+      refute_received :member_lookup
+    end
+
+    test "an upstream failure returns an error so the backfill job can retry" do
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
+      Repatch.patch(AdminAPI, :list_users, fn :ghost_client, _opts -> {:error, :forbidden} end)
+
+      assert {:error, :forbidden} = Members.sync_all_staff()
+    end
+
+    test "does not stamp a pre-existing account that already has a profile as Ghost-provisioned" do
+      # e.g. the instance admin, whose email matches the Ghost site owner: their account
+      # predates Ghost and must not get the member marker (or a name prefill) re-written
+      # on every backfill run
+      account = Fake.fake_account!()
+      _user = Fake.fake_user!(account)
+      email = account.email.email_address
+
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
+
+      Repatch.patch(AdminAPI, :list_users, fn :ghost_client, _opts ->
+        {:ok,
+         %{
+           "users" => [staff(email, name: "Ghost Owner")],
+           "meta" => %{"pagination" => %{"page" => 1, "next" => nil}}
+         }}
+      end)
+
+      assert {:ok, %{provisioned: 1, errors: []}} = Members.sync_all_staff()
+
+      account =
+        Accounts.get_by_email(email)
+        |> Bonfire.Common.Repo.maybe_preload(:settings)
+
+      assert Bonfire.Common.Settings.get([:bonfire_ghost, :member], nil,
+               current_account: account
+             ) == nil
+
+      assert Bonfire.Common.Settings.get([Bonfire.Me.Users, :suggested_profile_name], nil,
+               current_account: account
+             ) == nil
+    end
+  end
 end

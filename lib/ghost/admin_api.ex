@@ -311,6 +311,98 @@ defmodule Bonfire.Ghost.AdminAPI do
   end
 
   @doc """
+  Lists staff users (owner/admin/editor/author/contributor) from the Ghost blog.
+
+  Staff are a separate Ghost entity from members — they never appear in `/members/`
+  and Ghost emits no webhooks for them.
+
+  ## Options
+
+    * `:limit` - Number of users to return
+    * `:page` - Page number for pagination
+    * `:filter` - Ghost filter string (e.g., "email:'a@b.c'")
+    * `:order` - Sort order (e.g., "created_at asc")
+    * `:include` - Related data to include (e.g., "roles")
+
+  ## Examples
+
+      iex> Bonfire.Ghost.AdminAPI.list_users(client, limit: 50)
+      {:ok, %{"users" => [...], "meta" => %{...}}}
+  """
+  def list_users(client, opts \\ []) do
+    params =
+      [limit: Keyword.get(opts, :limit, 15)]
+      |> maybe_add_param(:page, opts)
+      |> maybe_add_param(:filter, opts)
+      |> maybe_add_param(:order, opts)
+      |> maybe_add_param(:include, opts)
+
+    case Req.get(client, url: "/users/", params: params) do
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        {:ok, body}
+
+      {:ok, %Req.Response{status: 401, body: body}} ->
+        error(body, "Ghost Admin API authentication failed")
+        {:error, :unauthorized}
+
+      {:ok, %Req.Response{status: 403, body: body}} ->
+        error(body, "Ghost Admin API access forbidden")
+        {:error, :forbidden}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        error(body, "Ghost Admin API error (status #{status})")
+        {:error, {:api_error, status, body}}
+
+      {:error, reason} ->
+        error(reason, "Ghost Admin API request failed")
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Gets a staff user by email address.
+
+  `email` is escaped before being interpolated into the NQL filter — on the gated-login
+  path it is raw, unvalidated user input (see `get_member_by_email/3`).
+
+  ## Examples
+
+      iex> Bonfire.Ghost.AdminAPI.get_user_by_email(client, "editor@example.com")
+      {:ok, %{"users" => [%{...}]}}
+  """
+  def get_user_by_email(client, email, opts \\ []) when is_binary(email) do
+    list_users(
+      client,
+      Keyword.merge(opts, filter: "email:'#{escape_nql_string(email)}'", limit: 1)
+    )
+  end
+
+  # Ghost's active staff states (see Ghost core `models/user.js` `activeStates`): the `warn-*` states are active users with failed-login warnings; suspended staff are `"inactive"` and locked staff `"locked"`, and neither may authenticate against Ghost itself.
+  @active_staff_statuses ~w(active warn-1 warn-2 warn-3 warn-4)
+
+  @doc """
+  NQL filter fragment matching only active (non-suspended, non-locked) staff. Ghost's admin-context `/users/` browse returns suspended and locked staff by default, so any query used to grant access must filter them out explicitly.
+  """
+  def active_staff_filter, do: "status:[#{Enum.join(@active_staff_statuses, ",")}]"
+
+  @doc """
+  Whether a Ghost staff payload is an active (non-suspended, non-locked) user. Fails closed: a missing or unknown `"status"` counts as not active.
+
+  ## Examples
+
+      iex> Bonfire.Ghost.AdminAPI.staff_active?(%{"status" => "active"})
+      true
+
+      iex> Bonfire.Ghost.AdminAPI.staff_active?(%{"status" => "inactive"})
+      false
+
+      iex> Bonfire.Ghost.AdminAPI.staff_active?(%{})
+      false
+  """
+  def staff_active?(user) when is_map(user), do: user["status"] in @active_staff_statuses
+  def staff_active?(_), do: false
+
+  @doc """
   Gets a Ghost staff user by their Ghost user ID.
 
   Returns the user map including `email` and `name`.

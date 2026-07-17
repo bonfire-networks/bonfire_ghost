@@ -13,6 +13,12 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
   defp page(posts, next),
     do: {:ok, %{"posts" => posts, "meta" => %{"pagination" => %{"page" => 1, "next" => next}}}}
 
+  setup do
+    # The status is stored in a shared cache, so isolate it between tests.
+    Articles.clear_status()
+    :ok
+  end
+
   describe "sync_all/1" do
     test "paginates across pages and counts synced articles" do
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
@@ -104,6 +110,92 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       Repatch.patch(Ghost, :configured?, fn -> false end)
 
       assert {:error, :not_configured} = Articles.sync_all()
+    end
+  end
+
+  describe "status/0 (progress the settings page shows)" do
+    test "reports :running progress while importing and :done with counts at the end" do
+      test_pid = self()
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      # Snapshot the status as seen mid-run, from inside an article import.
+      Repatch.patch(EmbedHelper, :import_article, fn post, _opts ->
+        send(test_pid, {:mid_run_status, post["id"], Articles.status()})
+        {:ok, :post}
+      end)
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
+        case Keyword.fetch!(opts, :page) do
+          1 -> page([post("a"), post("b")], 2)
+          2 -> page([post("c")], nil)
+        end
+      end)
+
+      assert {:ok, _} = Articles.sync_all()
+
+      assert_receive {:mid_run_status, "a", %{state: :running, page: 1, synced: 0}}
+      assert_receive {:mid_run_status, "b", %{state: :running, page: 1, synced: 1}}
+      assert_receive {:mid_run_status, "c", %{state: :running, page: 2, synced: 2}}
+
+      assert %{state: :done, synced: 3, filtered: 0, errors_count: 0, finished_at: %DateTime{}} =
+               Articles.status()
+    end
+
+    test "records per-article errors with a readable reason" do
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      Repatch.patch(EmbedHelper, :import_article, fn post, _opts ->
+        case post["id"] do
+          "bad" -> {:error, {:http_error, 422}}
+          _ -> {:ok, :post}
+        end
+      end)
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, _opts ->
+        page([post("ok"), post("bad")], nil)
+      end)
+
+      assert {:ok, %{synced: 1, errors: [_]}} = Articles.sync_all()
+
+      assert %{state: :done, synced: 1, errors_count: 1, errors: [err]} = Articles.status()
+      assert err.article == "https://blog.test/bad/"
+      assert err.reason =~ "422"
+    end
+
+    test "reports :failed with the reason when a page fetch fails" do
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+      Repatch.patch(AdminAPI, :list_posts, fn :client, _opts -> {:error, :nxdomain} end)
+
+      assert {:error, :nxdomain} = Articles.sync_all()
+
+      assert %{state: :failed, reason: "nxdomain"} = Articles.status()
+    end
+
+    test "reports :failed when Ghost has no credentials" do
+      Repatch.patch(Ghost, :admin_configured?, fn -> false end)
+      Repatch.patch(Ghost, :configured?, fn -> false end)
+
+      assert {:error, :not_configured} = Articles.sync_all()
+
+      assert %{state: :failed, reason: "Ghost is not configured"} = Articles.status()
+    end
+
+    test "caps the stored error list but keeps the full count" do
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+      Repatch.patch(EmbedHelper, :import_article, fn _post, _opts -> {:error, :boom} end)
+
+      posts = Enum.map(1..25, &post("p#{&1}"))
+      Repatch.patch(AdminAPI, :list_posts, fn :client, _opts -> page(posts, nil) end)
+
+      assert {:ok, %{errors: errors}} = Articles.sync_all()
+      assert length(errors) == 25
+
+      assert %{state: :done, errors_count: 25, errors: stored} = Articles.status()
+      assert length(stored) == 20
     end
   end
 end

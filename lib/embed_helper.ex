@@ -749,12 +749,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
          # authors need a full identity to be attributed as a poster, so eagerly
          # create the user (regular members instead go through /create-user)
          {:ok, user} <-
-           Bonfire.Ghost.Sync.Members.provision_from_ghost_member(ghost_staff,
-             create_user: true,
-             # a Ghost STAFF payload has no tiers — don't reconcile (it would either wipe their
-             # paid circles, or cost a futile member lookup on the embed mount's hot path)
-             reconcile_tiers: false
-           ) do
+           Bonfire.Ghost.Sync.Members.provision_from_ghost_staff(ghost_staff, create_user: true) do
       user
     else
       other ->

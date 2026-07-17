@@ -132,10 +132,30 @@ defmodule Bonfire.Ghost.LiveHandler do
 
       true ->
         case ArticleSyncWorker.new(%{}) |> Oban.insert() do
-          {:ok, _job} ->
+          # The worker is unique — a second click while a backfill is queued/running
+          # returns the existing job instead of a new one. Say so rather than
+          # pretending a fresh import started.
+          {:ok, %Oban.Job{conflict?: true}} ->
             {:noreply,
-             assign_flash(
-               socket,
+             socket
+             |> assign(:article_sync_status, Sync.Articles.status())
+             |> start_sync_status_polling()
+             |> assign_flash(
+               :info,
+               l("An article import is already queued or running — its progress is shown below.")
+             )}
+
+          {:ok, _job} ->
+            # Mark as queued right away so the status panel has something to show (and
+            # keeps polling) until the worker picks the job up and reports :running.
+            status =
+              Sync.Articles.put_status(%{state: :queued, queued_at: DateTime.utc_now()})
+
+            {:noreply,
+             socket
+             |> assign(:article_sync_status, status)
+             |> start_sync_status_polling()
+             |> assign_flash(
                :info,
                l(
                  "Article backfill started. Existing published Ghost articles will be imported in the background, honoring your author, group, and tag settings."
@@ -151,6 +171,13 @@ defmodule Bonfire.Ghost.LiveHandler do
              )}
         end
     end
+  end
+
+  # Kicks off the settings component's poll loop (see `GhostSettingsLive.update/2` with
+  # `sync_status_poll: true`) so the panel refreshes while the background job runs.
+  defp start_sync_status_polling(socket) do
+    Bonfire.Ghost.Web.GhostSettingsLive.schedule_sync_status_poll(socket)
+    assign(socket, :sync_polling, true)
   end
 
   # These sync actions enqueue instance-wide work (imports, boundary rewrites, member
@@ -212,6 +239,7 @@ defmodule Bonfire.Ghost.LiveHandler do
 
     socket
     |> assign(:articles_count, Ghost.imported_articles_count(blog_url))
+    |> assign(:article_sync_status, Sync.Articles.status())
     |> assign(:loading, false)
   end
 

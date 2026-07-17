@@ -35,8 +35,36 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   data auto_import, :boolean, default: false
   data articles_count, :any, default: nil
   data topic_matching_group, :any, default: :__unset__
+  # Live status of the background article backfill — see Bonfire.Ghost.Sync.Articles.status/0.
+  data article_sync_status, :any, default: nil
+  data sync_polling, :boolean, default: false
   # Fail-closed: only flipped true once the viewer is confirmed to be an instance admin.
   data authorized, :boolean, default: false
+
+  # 2s poll while an article backfill is queued/running: re-reads the status the worker
+  # writes to the cache after every imported article, and stops itself once it finishes
+  # (refreshing the imported-articles count on the way out).
+  def update(%{sync_status_poll: true}, socket) do
+    if socket.assigns[:authorized] != true do
+      {:ok, socket}
+    else
+      status = Bonfire.Ghost.Sync.Articles.status()
+      socket = assign(socket, :article_sync_status, status)
+
+      if sync_in_flight?(status) do
+        schedule_sync_status_poll(socket)
+        {:ok, assign(socket, :sync_polling, true)}
+      else
+        blog_url = (is_map(socket.assigns[:settings]) && socket.assigns.settings["url"]) || nil
+
+        {:ok,
+         assign(socket,
+           sync_polling: false,
+           articles_count: Bonfire.Ghost.imported_articles_count(blog_url)
+         )}
+      end
+    end
+  end
 
   def update(assigns, socket) do
     socket = assign(socket, assigns)
@@ -69,9 +97,46 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
          # `checked` comparison and the webhook block agree. Reuses the canonical predicate.
          auto_import: Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?()
        )
-       |> assign_show_topic_matching()}
+       |> assign_show_topic_matching()
+       |> maybe_resume_sync_polling()}
     end
   end
+
+  # If a backfill was already queued/running when the page (re)loaded, resume the status
+  # poll loop — `sync_polling` dedupes so unrelated update/2 calls don't stack timers.
+  defp maybe_resume_sync_polling(socket) do
+    if sync_in_flight?(socket.assigns[:article_sync_status]) and
+         socket.assigns[:sync_polling] != true do
+      schedule_sync_status_poll(socket)
+      assign(socket, :sync_polling, true)
+    else
+      socket
+    end
+  end
+
+  @doc false
+  def schedule_sync_status_poll(socket) do
+    if id = socket.assigns[:id] do
+      Phoenix.LiveView.send_update_after(__MODULE__, [id: id, sync_status_poll: true], 2_000)
+    end
+
+    socket
+  end
+
+  @doc "State atom of the article backfill status map (nil when none)."
+  def sync_state(%{state: state}), do: state
+  def sync_state(_), do: nil
+
+  @doc "Whether an article backfill is queued, running, or about to be retried."
+  def sync_in_flight?(status), do: sync_state(status) in [:queued, :running, :retrying]
+
+  @doc "A counter from the status map, defaulting to 0."
+  def sync_count(status, key) when is_map(status), do: Map.get(status, key) || 0
+  def sync_count(_, _), do: 0
+
+  @doc "Capped list of per-article import errors (`%{article: label, reason: string}`)."
+  def sync_errors(%{errors: errors}) when is_list(errors), do: errors
+  def sync_errors(_), do: []
 
   # Gate on the same permission the settings write path enforces (`can?(:configure, :instance)`).
   defp authorized?(socket) do
@@ -115,6 +180,12 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
       _ -> "-"
     end
   end
+
+  @doc "Relative timestamp (\"5 minutes ago\") with a date fallback, for sync status lines."
+  def format_time_ago(nil), do: "-"
+
+  def format_time_ago(dt),
+    do: Bonfire.Common.DatesTimes.date_from_now(dt) || format_date(dt)
 
   # Locale-aware thousands grouping (6309 → "6,309"), with a plain-integer fallback.
   def format_count(n) when is_integer(n) do

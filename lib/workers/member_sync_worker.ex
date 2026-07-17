@@ -19,9 +19,25 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
   def perform(%Oban.Job{args: args}) when is_map(args) do
     with {:ok, tier_summary, tiers} <- sync_tiers(),
          {:ok, member_summary} <- Members.sync_all(tiers: tiers) do
-      info(%{tiers: tier_summary, members: member_summary}, "Ghost member backfill complete")
+      # reported before the staff pass so a staff failure can't suppress member diagnostics
       warn_member_errors(member_summary)
-      :ok
+
+      case sync_staff() do
+        {:ok, staff_summary} ->
+          info(
+            %{tiers: tier_summary, members: member_summary, staff: staff_summary},
+            "Ghost member backfill complete"
+          )
+
+          warn_member_errors(staff_summary)
+          :ok
+
+        {:error, _} = e ->
+          e
+
+        {:cancel, _} = c ->
+          c
+      end
     else
       {:error, _} = e ->
         e
@@ -38,6 +54,25 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
   def perform(%Oban.Job{args: args}) do
     error(args, "MemberSyncWorker: unrecognized args shape")
     {:cancel, :invalid_args}
+  end
+
+  # Staff (owner/admin/editor/author/contributor) are backfilled after members: Ghost emits no webhooks for them, so this pass is their only sync path besides gated login. Auth errors on /users/ are deterministic (bad or under-scoped integration key), so cancel instead of burning retries; anything else retries the whole job, which is safe because the member passes are idempotent.
+  defp sync_staff do
+    case Members.sync_all_staff([]) do
+      {:error, reason} when reason in [:unauthorized, :forbidden] ->
+        error(reason, "Ghost staff backfill failed with an auth error, cancelling")
+        {:cancel, {:staff_sync_failed, reason}}
+
+      {:ok, _} = ok ->
+        ok
+
+      {:error, _} = e ->
+        e
+
+      other ->
+        error(other, "Ghost staff backfill returned an unexpected result")
+        {:error, {:unexpected_sync_result, other}}
+    end
   end
 
   defp sync_tiers do

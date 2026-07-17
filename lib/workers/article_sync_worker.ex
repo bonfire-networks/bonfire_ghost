@@ -17,7 +17,8 @@ defmodule Bonfire.Ghost.Workers.ArticleSyncWorker do
   alias Bonfire.Ghost.Sync.Articles
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) when is_map(args) do
+  def perform(%Oban.Job{args: args, attempt: attempt, max_attempts: max_attempts})
+      when is_map(args) do
     case Articles.sync_all([]) do
       {:ok, summary} ->
         info(summary, "Ghost article backfill complete")
@@ -30,6 +31,18 @@ defmodule Bonfire.Ghost.Workers.ArticleSyncWorker do
 
       {:error, reason} = e ->
         error(reason, "Ghost article backfill failed")
+
+        # `sync_all` already stored a :failed status; refine it with retry info so the
+        # settings page can say "retrying (attempt 1 of 3)" instead of a dead-end error.
+        Articles.put_status(
+          Map.merge(Articles.status() || %{}, %{
+            state: if(attempt < max_attempts, do: :retrying, else: :failed),
+            reason: Articles.format_reason(reason),
+            attempt: attempt,
+            max_attempts: max_attempts
+          })
+        )
+
         e
     end
   end

@@ -12,7 +12,7 @@ defmodule Bonfire.Ghost.AdminAPIFilterTest do
 
   alias Bonfire.Ghost.AdminAPI
 
-  doctest Bonfire.Ghost.AdminAPI, import: true, only: [escape_nql_string: 1]
+  doctest Bonfire.Ghost.AdminAPI, import: true, only: [escape_nql_string: 1, staff_active?: 1]
 
   # Capture the filter `get_member_by_email/3` hands to `list_members/2`, without HTTP.
   defp captured_filter(email) do
@@ -27,6 +27,38 @@ defmodule Bonfire.Ghost.AdminAPIFilterTest do
       {:filter, filter} -> filter
     after
       0 -> flunk("list_members was never called")
+    end
+  end
+
+  # Same capture for `get_user_by_email/3` → `list_users/2` (the staff-fallback lookup on
+  # the gated-login path — also raw user input).
+  defp captured_user_filter(email) do
+    Repatch.patch(AdminAPI, :list_users, fn _client, opts ->
+      send(self(), {:filter, Keyword.get(opts, :filter)})
+      {:ok, %{"users" => []}}
+    end)
+
+    AdminAPI.get_user_by_email(:client, email)
+
+    receive do
+      {:filter, filter} -> filter
+    after
+      0 -> flunk("list_users was never called")
+    end
+  end
+
+  describe "get_user_by_email/3 NQL escaping" do
+    test "a plain email produces the expected filter" do
+      assert captured_user_filter("editor@example.com") == "email:'editor@example.com'"
+    end
+
+    test "a quote in the email cannot break out of the NQL string literal" do
+      filter = captured_user_filter("a'b@example.com")
+
+      refute filter == "email:'a'b@example.com'",
+             "unescaped quote broke out of the NQL string literal — filter is injectable"
+
+      assert filter == "email:'a\\'b@example.com'"
     end
   end
 

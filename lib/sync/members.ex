@@ -59,6 +59,28 @@ defmodule Bonfire.Ghost.Sync.Members do
   end
 
   @doc """
+  Backfills Ghost *staff* users (owner/admin/editor/author/contributor) into local Bonfire accounts.
+
+  Staff are not members: they never arrive via `member.*` webhooks (Ghost has no staff webhook events at all) and are invisible to `sync_all/1`'s member pages, so without this pass existing staff could only get an account by attempting the gated login. Account-only, like the member backfill — staff pick their own handle via `/create-user` — and via `provision_from_ghost_staff/2`, so tier reconciliation is skipped. Only active staff are fetched: suspended/locked staff must not get login-capable accounts.
+  """
+  @spec sync_all_staff(keyword()) :: {:ok, sync_summary()} | {:error, term()}
+  def sync_all_staff(opts \\ []) do
+    sync_staff_page(1, @empty_summary, opts)
+  end
+
+  @doc """
+  Provisions a local identity from a Ghost *staff* payload (owner/admin/editor/author/contributor) — same contract and options as `provision_from_ghost_member/2`.
+
+  This wrapper owns the staff invariant so call sites can't forget it: a staff payload has no `"tiers"` key, so circle reconciliation is skipped (`reconcile_tiers: false`) instead of coercing to "no tiers" (which would strip paid circles) or costing a futile Members-API lookup per staffer.
+  """
+  @spec provision_from_ghost_staff(map(), keyword()) ::
+          {:ok, Bonfire.Data.Identity.User.t() | Bonfire.Data.Identity.Account.t()}
+          | {:error, term()}
+  def provision_from_ghost_staff(ghost_staff, opts \\ []) do
+    provision_from_ghost_member(ghost_staff, Keyword.put(opts, :reconcile_tiers, false))
+  end
+
+  @doc """
   Provisions a local identity from a Ghost member payload.
 
   By default (regular members) this creates the **Account only** (email +
@@ -140,14 +162,19 @@ defmodule Bonfire.Ghost.Sync.Members do
       |> e(:email, :email_address, nil)
   end
 
-  # Account-only: no auto-username. Reconcile circles only if a user already exists.
+  # Account-only: no auto-username. Reconcile circles only if a user already exists
+  # (and `reconcile_tiers: false` — the staff paths — skips even that).
   defp provision_account_only(ghost_member, email, opts) do
     with {:ok, _new?, account} <- ensure_account(email) do
-      stash_member_context(account, ghost_member)
-
       case Users.by_account!(account) do
-        [] -> :ok
-        users -> Enum.each(users, &reconcile_circles(&1, ghost_member, opts))
+        [] ->
+          # Stash only pre-profile: /create-user consumes the prefill, and re-stamping an
+          # account that already has profiles would mark pre-existing (e.g. admin) accounts
+          # as Ghost-provisioned and overwrite their suggested name on every backfill run.
+          stash_member_context(account, ghost_member)
+
+        users ->
+          Enum.each(users, &maybe_reconcile_circles(&1, ghost_member, opts))
       end
 
       {:ok, account}
@@ -350,8 +377,60 @@ defmodule Bonfire.Ghost.Sync.Members do
     )
   end
 
-  defp sync_member(member, summary, opts) do
-    case provision_from_ghost_member(member, opts) do
+  # Same page-walking shape as sync_members_page/3, over `/users/` instead of `/members/`.
+  defp sync_staff_page(page, summary, opts) do
+    with {:ok, client} <- Ghost.admin_client() do
+      case list_users(client, page, opts) do
+        {:ok, %{"users" => users, "meta" => meta}} when is_list(users) ->
+          summary =
+            Enum.reduce(users, summary, fn user, acc ->
+              sync_member(user, acc, opts, &provision_from_ghost_staff/2)
+            end)
+
+          case next_page(meta) do
+            nil ->
+              {:ok, summary}
+
+            next when next > page ->
+              sync_staff_page(next, summary, opts)
+
+            next ->
+              warn(
+                %{page: page, next: next},
+                "Ghost staff pagination did not advance, stopping backfill"
+              )
+
+              {:ok, summary}
+          end
+
+        {:ok, %{"users" => users}} when is_list(users) ->
+          {:ok,
+           Enum.reduce(users, summary, fn user, acc ->
+             sync_member(user, acc, opts, &provision_from_ghost_staff/2)
+           end)}
+
+        {:ok, other} ->
+          error(other, "Ghost staff backfill returned an unexpected payload")
+          {:error, :invalid_users_payload}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp list_users(client, page, opts) do
+    AdminAPI.list_users(client,
+      limit: Keyword.get(opts, :page_size, @page_size),
+      page: page,
+      order: "created_at asc",
+      # suspended/locked staff must not get accounts, and Ghost returns them unless filtered
+      filter: AdminAPI.active_staff_filter()
+    )
+  end
+
+  defp sync_member(member, summary, opts, provision \\ &provision_from_ghost_member/2) do
+    case provision.(member, opts) do
       {:ok, _user} ->
         Map.update!(summary, :provisioned, &(&1 + 1))
 

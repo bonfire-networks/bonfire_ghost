@@ -7,8 +7,15 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   is submitted so that a Ghost member with an active tier can seamlessly log in
   — the local account+user+circles are provisioned on the fly and then the
   standard magic-link flow picks them up.
+
+  Ghost *staff* (owner/admin/editor/author/contributor) are a separate Ghost entity:
+  they don't appear in the Members API and Ghost emits no webhooks for them, so when
+  the member lookup misses we fall back to a staff lookup. Staff bypass the
+  `required_tier` gate — they're the site's own team and have no tiers to gate on.
   """
   @behaviour Bonfire.UI.Me.LoginEmailProvider
+
+  import Untangle
 
   alias Bonfire.Ghost
   alias Bonfire.Ghost.AdminAPI
@@ -32,12 +39,17 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
           if tier_allowed?(member) do
             Members.provision_from_ghost_member(member)
           else
-            # no hint email here — the dispatcher already sends one when all providers `:no_match`
-            :no_match
+            # A member failing the tier gate can still be staff (e.g. subscribed to their
+            # own newsletter on a free tier) — staff bypass the gate. If they're not staff
+            # either, this returns :no_match with no hint email — the dispatcher already
+            # sends one when all providers `:no_match`.
+            ensure_staff_account(c, email)
           end
 
         {:ok, _} ->
-          :no_match
+          # Not a member at all — but Ghost staff (owner/admin/editor/author/contributor)
+          # are a separate entity that never appears in the Members API, so check them too.
+          ensure_staff_account(c, email)
 
         {:error, reason} ->
           {:error, reason}
@@ -46,6 +58,27 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   end
 
   def ensure_account(_), do: :no_match
+
+  # Staff have no tiers, so the `required_tier` gate deliberately does not apply to them —
+  # they're the site's own team. Ghost-side suspension is honored instead: it is the ONLY
+  # offboarding control for staff, and Ghost's /users/ lookup returns suspended/locked rows.
+  defp ensure_staff_account(client, email) do
+    case AdminAPI.get_user_by_email(client, email) do
+      {:ok, %{"users" => [staff | _]}} ->
+        if AdminAPI.staff_active?(staff) do
+          Members.provision_from_ghost_staff(staff)
+        else
+          info(email, "Ghost staff exists but is suspended/locked — not provisioning")
+          :no_match
+        end
+
+      {:ok, _} ->
+        :no_match
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp tier_allowed?(member) do
     # MUST be `Settings.get(..., :instance)`: `Config.get/3`'s 3rd arg is an **otp_app**, not a

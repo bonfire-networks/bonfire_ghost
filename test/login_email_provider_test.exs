@@ -30,12 +30,27 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
     }
   end
 
+  defp staff(status \\ "active") do
+    # a Ghost staff payload has NO "tiers" key at all
+    %{
+      "id" => "ghost_staff_1",
+      "email" => @email,
+      "name" => "A Staffer",
+      "slug" => "a-staffer",
+      "status" => status,
+      "roles" => [%{"name" => "Contributor"}]
+    }
+  end
+
   # Stub the Admin API so `ensure_account/1` runs its real logic against a known payload.
-  defp stub_members(result) do
+  # The staff lookup runs whenever the member lookup misses (or fails the tier gate), so
+  # it always needs a stub too — "no staff" by default.
+  defp stub_members(result, staff_result \\ {:ok, %{"users" => []}}) do
     Repatch.patch(Ghost, :admin_configured?, fn -> true end)
     Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
 
     Repatch.patch(AdminAPI, :get_member_by_email, fn :client, _email, _opts -> result end)
+    Repatch.patch(AdminAPI, :get_user_by_email, fn :client, _email -> staff_result end)
     :ok
   end
 
@@ -175,6 +190,98 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
              "a paying member with an apostrophe in their address was refused a login"
 
       assert Bonfire.Me.Accounts.get_by_email(apostrophe)
+    end
+  end
+
+  describe "ensure_account/1 staff fallback" do
+    # Ghost staff (owner/admin/editor/author/contributor) are not members: they never
+    # appear in the Members API and Ghost emits no webhooks for them, so the staff
+    # lookup at login is their provisioning path.
+
+    test "a staff user who is not a member is provisioned, bypassing the tier gate" do
+      require_tiers(["paid"])
+      stub_members({:ok, %{"members" => []}}, {:ok, %{"users" => [staff()]}})
+
+      assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
+
+      # account-only, like members: staff pick their own handle at /create-user
+      assert account = Bonfire.Me.Accounts.get_by_email(@email)
+      assert Bonfire.Me.Users.by_account!(account) == []
+    end
+
+    test "a member failing the tier gate who is ALSO staff is still provisioned" do
+      # e.g. an editor subscribed to their own newsletter on the free tier
+      require_tiers(["paid"])
+      stub_members({:ok, %{"members" => [member(["free"])]}}, {:ok, %{"users" => [staff()]}})
+
+      assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
+      assert Bonfire.Me.Accounts.get_by_email(@email)
+    end
+
+    test "an email that is neither member nor staff stays :no_match" do
+      stub_members({:ok, %{"members" => []}}, {:ok, %{"users" => []}})
+
+      assert :no_match = LoginEmailProvider.ensure_account(@email)
+      refute Bonfire.Me.Accounts.get_by_email(@email)
+    end
+
+    test "a staff-lookup API error is returned, not raised" do
+      stub_members({:ok, %{"members" => []}}, {:error, :forbidden})
+
+      assert {:error, :forbidden} = LoginEmailProvider.ensure_account(@email)
+      refute Bonfire.Me.Accounts.get_by_email(@email)
+    end
+
+    test "a SUSPENDED staffer is not provisioned — Ghost-side offboarding is honored" do
+      # suspension in Ghost sets status "inactive" and is the only offboarding control
+      # for staff (no tiers to revoke), so it must gate the Bonfire side too
+      stub_members({:ok, %{"members" => []}}, {:ok, %{"users" => [staff("inactive")]}})
+
+      assert :no_match = LoginEmailProvider.ensure_account(@email)
+      refute Bonfire.Me.Accounts.get_by_email(@email)
+    end
+
+    test "a LOCKED staffer is not provisioned" do
+      stub_members({:ok, %{"members" => []}}, {:ok, %{"users" => [staff("locked")]}})
+
+      assert :no_match = LoginEmailProvider.ensure_account(@email)
+      refute Bonfire.Me.Accounts.get_by_email(@email)
+    end
+
+    test "a staff payload with no status field fails closed" do
+      stub_members(
+        {:ok, %{"members" => []}},
+        {:ok, %{"users" => [Map.delete(staff(), "status")]}}
+      )
+
+      assert :no_match = LoginEmailProvider.ensure_account(@email)
+      refute Bonfire.Me.Accounts.get_by_email(@email)
+    end
+
+    test "warn-* statuses count as active (failed-login warnings, not suspension)" do
+      stub_members({:ok, %{"members" => []}}, {:ok, %{"users" => [staff("warn-2")]}})
+
+      assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
+    end
+
+    test "a member on an ALLOWED tier never costs a staff lookup" do
+      require_tiers(["paid"])
+      test_pid = self()
+
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      Repatch.patch(AdminAPI, :get_member_by_email, fn :client, _email, _opts ->
+        {:ok, %{"members" => [member(["paid"])]}}
+      end)
+
+      Repatch.patch(AdminAPI, :get_user_by_email, fn :client, _email ->
+        send(test_pid, :staff_lookup)
+        {:ok, %{"users" => []}}
+      end)
+
+      assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
+      refute_received :staff_lookup
     end
   end
 
