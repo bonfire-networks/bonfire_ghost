@@ -132,9 +132,6 @@ defmodule Bonfire.Ghost.LiveHandler do
 
       true ->
         case ArticleSyncWorker.new(%{}) |> Oban.insert() do
-          # The worker is unique — a second click while a backfill is queued/running
-          # returns the existing job instead of a new one. Say so rather than
-          # pretending a fresh import started.
           {:ok, %Oban.Job{conflict?: true}} ->
             {:noreply,
              socket
@@ -145,11 +142,13 @@ defmodule Bonfire.Ghost.LiveHandler do
                l("An article import is already queued or running — its progress is shown below.")
              )}
 
-          {:ok, _job} ->
-            # Mark as queued right away so the status panel has something to show (and
-            # keeps polling) until the worker picks the job up and reports :running.
+          {:ok, %Oban.Job{} = job} ->
             status =
-              Sync.Articles.put_status(%{state: :queued, queued_at: DateTime.utc_now()})
+              Sync.Articles.put_status(%{
+                state: :queued,
+                job_id: job.id,
+                queued_at: DateTime.utc_now()
+              })
 
             {:noreply,
              socket

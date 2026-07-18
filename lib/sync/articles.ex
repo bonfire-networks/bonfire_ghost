@@ -10,9 +10,7 @@ defmodule Bonfire.Ghost.Sync.Articles do
 
   Returns `{:ok, summary}` where `summary` counts successful upserts, articles skipped by the configured tag filter, and per-article errors (a single bad article never aborts the whole backfill), or `{:error, reason}` when a page fetch fails (so the Oban job retries) or Ghost has no credentials at all.
 
-  Progress is also written to `Bonfire.Common.Cache` after every imported article (see
-  `status/0`), so the settings page can show what the background job is doing instead of
-  the backfill being a black box that only reports to server logs.
+  Progress is also written to `Bonfire.Common.Cache` after every imported article (see `status/0`) so the settings page can show what the background job is doing.
   """
 
   import Untangle
@@ -36,45 +34,52 @@ defmodule Bonfire.Ghost.Sync.Articles do
   # The status is rewritten after every article, so cap the error detail we carry along.
   @max_stored_errors 20
 
-  # Watchdog for a single article import: Oban's `perform` has no timeout of its own, so
-  # without this one blocked import (stuck HTTP pool checkout, DB lock, slow search
-  # indexing…) would freeze the whole backfill forever while the status panel silently
-  # stops moving. Seen in production: a 2500-article backfill stuck mid-page for 30+ min.
+  # Oban does not time out `perform`, so a blocked import would otherwise freeze the whole backfill.
   @default_import_timeout :timer.minutes(2)
 
   @type sync_summary :: %{
           synced: non_neg_integer(),
           filtered: non_neg_integer(),
+          errors_count: non_neg_integer(),
           errors: [{String.t(), term()}]
         }
 
-  @empty_summary %{synced: 0, filtered: 0, errors: []}
+  @empty_summary %{synced: 0, filtered: 0, errors_count: 0, errors: []}
+  @sync_option_keys [:checkpoint, :job_id, :on_checkpoint, :restart]
 
   @doc """
   Fetches every published Ghost article (paginated) and imports each one.
 
-  Prefers the Admin API (full `html` for gated posts too), falling back to the
-  Content API when only Content credentials are configured.
+  Prefers the Admin API (full `html` for gated posts too), falling back to the Content API when only Content credentials are configured.
 
-  `opts` are forwarded to `EmbedHelper.import_article/2` — normally empty so the
-  instance-configured author/group/tag/topic settings are used.
+  Import-related `opts` are forwarded to `EmbedHelper.import_article/2`. Worker-only checkpoint options are consumed here and never forwarded to the importer.
   """
   @spec sync_all(keyword()) :: {:ok, sync_summary()} | {:error, term()}
   def sync_all(opts \\ []) do
-    # Resume an interrupted sweep instead of redoing every already-imported article:
-    # if the last run stopped mid-way (an Oban retry after a page-fetch failure, a node
-    # restart, etc.), pick up from the page it reached and carry its counts forward.
-    {start_page, start_summary} = resume_point(opts)
+    {sync_opts, import_opts} = Keyword.split(opts, @sync_option_keys)
+    {start_page, start_summary} = resume_point(sync_opts)
 
     cond do
       Ghost.admin_configured?() ->
-        with_status_tracking(start_page, start_summary, fn ->
-          paginate_and_import(&fetch_admin_page/1, start_page, start_summary, opts)
+        with_status_tracking(start_page, start_summary, sync_opts, fn ->
+          paginate_and_import(
+            &fetch_admin_page/1,
+            start_page,
+            start_summary,
+            sync_opts,
+            import_opts
+          )
         end)
 
       Ghost.configured?() ->
-        with_status_tracking(start_page, start_summary, fn ->
-          paginate_and_import(&fetch_content_page/1, start_page, start_summary, opts)
+        with_status_tracking(start_page, start_summary, sync_opts, fn ->
+          paginate_and_import(
+            &fetch_content_page/1,
+            start_page,
+            start_summary,
+            sync_opts,
+            import_opts
+          )
         end)
 
       true ->
@@ -88,28 +93,55 @@ defmodule Bonfire.Ghost.Sync.Articles do
     end
   end
 
-  # Where to (re)start the sweep. A prior run left in a non-terminal-success state with a
-  # page past the first means it was interrupted — resume there (re-doing the current page
-  # is safe, since imports upsert). Anything else (no prior run, or a completed one) starts
-  # fresh at page 1. `restart: true` forces a clean full sweep.
+  # Cache-backed UI status is not execution state: it disappears on restart and represents partially completed pages.
   defp resume_point(opts) do
     with false <- Keyword.get(opts, :restart, false),
-         %{state: state, page: page} = prior when state in [:running, :retrying, :failed] <-
-           status(),
-         true <- is_integer(page) and page > 1 do
-      info(page, "Resuming interrupted Ghost article backfill from page")
+         checkpoint when is_map(checkpoint) <- Keyword.get(opts, :checkpoint),
+         page when is_integer(page) <- checkpoint_value(checkpoint, :page),
+         true <- page > 1 do
+      info(page, "Resuming Ghost article backfill from durable checkpoint")
 
-      # Carry the progress counters forward so the UI keeps counting up instead of
-      # snapping back to 0; the per-article error list restarts for this leg (the prior
-      # errors were already capped and logged), but the running counts continue.
       {page,
-       %{@empty_summary | synced: prior_count(prior, :synced), filtered: prior_count(prior, :filtered)}}
+       %{
+         @empty_summary
+         | synced: checkpoint_count(checkpoint, :synced),
+           filtered: checkpoint_count(checkpoint, :filtered),
+           errors_count: checkpoint_count(checkpoint, :errors_count),
+           errors: checkpoint_errors(checkpoint)
+       }}
     else
       _ -> {1, @empty_summary}
     end
   end
 
-  defp prior_count(status, key), do: Map.get(status, key) || 0
+  defp checkpoint_value(checkpoint, key),
+    do: Map.get(checkpoint, key) || Map.get(checkpoint, to_string(key))
+
+  defp checkpoint_count(checkpoint, key) do
+    case checkpoint_value(checkpoint, key) do
+      count when is_integer(count) and count >= 0 -> count
+      _ -> 0
+    end
+  end
+
+  defp checkpoint_errors(checkpoint) do
+    checkpoint
+    |> checkpoint_value(:errors)
+    |> case do
+      errors when is_list(errors) -> errors
+      _ -> []
+    end
+    |> Enum.flat_map(fn
+      %{} = error ->
+        case {checkpoint_value(error, :article), checkpoint_value(error, :reason)} do
+          {article, reason} when is_binary(article) and is_binary(reason) -> [{article, reason}]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+  end
 
   @doc """
   Current backfill status for the settings UI, or nil when none ran recently.
@@ -147,16 +179,18 @@ defmodule Bonfire.Ghost.Sync.Articles do
   def format_reason(reason) when is_atom(reason), do: to_string(reason)
   def format_reason(reason), do: reason |> inspect() |> String.slice(0, 500)
 
-  defp with_status_tracking(start_page, start_summary, fun) do
-    put_status(%{
+  defp with_status_tracking(start_page, start_summary, sync_opts, fun) do
+    %{
       state: :running,
       started_at: DateTime.utc_now(),
       page: start_page,
       synced: start_summary.synced,
       filtered: start_summary.filtered,
-      errors_count: 0,
-      errors: []
-    })
+      errors_count: start_summary.errors_count,
+      errors: stored_errors(start_summary.errors)
+    }
+    |> maybe_put(:job_id, Keyword.get(sync_opts, :job_id))
+    |> put_status()
 
     case fun.() do
       {:ok, summary} ->
@@ -183,7 +217,7 @@ defmodule Bonfire.Ghost.Sync.Articles do
         %{
           synced: summary.synced,
           filtered: summary.filtered,
-          errors_count: length(summary.errors),
+          errors_count: summary.errors_count,
           errors: stored_errors(summary.errors)
         },
         extra
@@ -203,6 +237,9 @@ defmodule Bonfire.Ghost.Sync.Articles do
     |> Enum.take(@max_stored_errors)
     |> Enum.map(fn {label, reason} -> %{article: label, reason: format_reason(reason)} end)
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # A fresh client per page keeps the short-lived Admin JWT (5 min) valid across a
   # long backfill; the Content API key doesn't expire but is recreated for symmetry.
@@ -231,20 +268,22 @@ defmodule Bonfire.Ghost.Sync.Articles do
 
   # `on_filtered: :skip` — a bulk backfill must never retroactively hide posts (created
   # via embeds or before the tag filter existed) just because they don't match the filter.
-  defp paginate_and_import(fetch_page, page, summary, opts) do
-    opts = Keyword.put_new(opts, :on_filtered, :skip)
+  defp paginate_and_import(fetch_page, page, summary, sync_opts, import_opts) do
+    import_opts = Keyword.put_new(import_opts, :on_filtered, :skip)
     report_progress_extra(%{page: page})
 
     case fetch_page.(page) do
       {:ok, %{"posts" => posts, "meta" => meta}} when is_list(posts) ->
-        summary = Enum.reduce(posts, summary, &import_one(&1, &2, opts))
+        summary = Enum.reduce(posts, summary, &import_one(&1, &2, import_opts))
 
         case next_page(meta) do
           nil ->
             {:ok, summary}
 
           next when next > page ->
-            paginate_and_import(fetch_page, next, summary, opts)
+            with :ok <- persist_checkpoint(sync_opts, next, summary) do
+              paginate_and_import(fetch_page, next, summary, sync_opts, import_opts)
+            end
 
           next ->
             warn(
@@ -256,7 +295,7 @@ defmodule Bonfire.Ghost.Sync.Articles do
         end
 
       {:ok, %{"posts" => posts}} when is_list(posts) ->
-        {:ok, Enum.reduce(posts, summary, &import_one(&1, &2, opts))}
+        {:ok, Enum.reduce(posts, summary, &import_one(&1, &2, import_opts))}
 
       {:ok, other} ->
         error(other, "Ghost articles backfill returned an unexpected payload")
@@ -271,38 +310,178 @@ defmodule Bonfire.Ghost.Sync.Articles do
 
   defp import_one(post, summary, opts) do
     label = article_label(post)
-    # Recording which article is being imported *before* importing it means that even if
-    # everything below wedges, the status panel names the culprit article.
-    report_progress_extra(%{current: label})
+    report_progress_extra(%{current: label, stage: :starting})
 
     timeout = import_timeout()
-    task = Task.async(fn -> try_import(post, opts) end)
+    owner = self()
+    result_ref = make_ref()
+    stage_ref = make_ref()
 
-    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+    on_stage = fn stage ->
+      send(owner, {stage_ref, stage})
+      report_progress_extra(%{stage: stage})
+    end
+
+    {:ok, pid} =
+      Task.start(fn ->
+        receive do
+          {^result_ref, :run} ->
+            result = try_import(post, Keyword.put(opts, :on_stage, on_stage))
+            send(owner, {result_ref, result})
+        end
+      end)
+
+    monitor_ref = Process.monitor(pid)
+    send(pid, {result_ref, :run})
+    result = await_import(pid, monitor_ref, result_ref, timeout)
+
+    case result do
       {:ok, :synced} ->
+        latest_stage(stage_ref, :starting)
         %{summary | synced: summary.synced + 1}
 
       {:ok, :filtered} ->
+        latest_stage(stage_ref, :starting)
         %{summary | filtered: summary.filtered + 1}
 
       {:ok, {:error, reason}} ->
-        %{summary | errors: [{label, reason} | summary.errors]}
+        latest_stage(stage_ref, :starting)
+        add_error(summary, label, reason)
 
-      # nil (timed out, killed) or {:exit, _} — record it as a per-article error and move
-      # on, rather than letting one stuck article freeze the whole backfill.
-      other ->
+      :timeout ->
+        stacktrace = process_stacktrace(pid)
+        stop_import(pid, monitor_ref)
+        stage = latest_stage(stage_ref, :starting)
+        reason = timeout_reason(timeout, stage, stacktrace)
+
         warn(
-          %{article: label, result: other, timeout: timeout},
-          "Ghost article import timed out or crashed — skipping this article and continuing"
+          %{article: label, stage: stage, stacktrace: stacktrace, timeout: timeout},
+          "Ghost article import timed out — skipping this article and continuing"
         )
 
-        %{summary | errors: [{label, "import timed out after #{div(timeout, 1000)}s"} | summary.errors]}
+        add_error(summary, label, reason)
+
+      {:exit, reason} ->
+        stage = latest_stage(stage_ref, :starting)
+
+        warn(
+          %{article: label, stage: stage, reason: reason},
+          "Ghost article import process crashed — skipping this article and continuing"
+        )
+
+        add_error(
+          summary,
+          label,
+          "Import process crashed during #{format_stage(stage)}: #{format_reason(reason)}"
+        )
     end
     |> report_progress()
   end
 
-  # Runs inside the watchdog Task; must never crash (a crash of a linked Task would take
-  # the whole backfill down with it), so every failure becomes an `{:error, reason}` value.
+  defp await_import(pid, monitor_ref, result_ref, timeout) do
+    receive do
+      {^result_ref, result} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^monitor_ref, :process, ^pid, reason} ->
+        {:exit, reason}
+    after
+      timeout -> :timeout
+    end
+  end
+
+  defp latest_stage(stage_ref, latest) do
+    receive do
+      {^stage_ref, stage} -> latest_stage(stage_ref, stage)
+    after
+      0 -> latest
+    end
+  end
+
+  defp stop_import(pid, monitor_ref) do
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} -> :ok
+    after
+      1_000 -> Process.demonitor(monitor_ref, [:flush])
+    end
+  end
+
+  defp add_error(summary, label, reason) do
+    %{
+      summary
+      | errors: [{label, reason} | summary.errors],
+        errors_count: summary.errors_count + 1
+    }
+  end
+
+  defp process_stacktrace(pid) do
+    case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, stacktrace} ->
+        stacktrace
+        |> Enum.take(8)
+        |> Enum.map(&sanitize_stacktrace_entry/1)
+        |> Exception.format_stacktrace()
+        |> String.trim()
+        |> String.slice(0, 1_500)
+
+      _ ->
+        "unavailable"
+    end
+  end
+
+  defp sanitize_stacktrace_entry({module, function, args, location}) when is_list(args),
+    do: {module, function, length(args), location}
+
+  defp sanitize_stacktrace_entry(entry), do: entry
+
+  defp timeout_reason(timeout, stage, stacktrace) do
+    "Import timed out after #{div(timeout, 1000)}s during #{format_stage(stage)}. Worker stack: #{stacktrace}"
+  end
+
+  defp format_stage(stage) when is_atom(stage),
+    do: stage |> Atom.to_string() |> String.replace("_", " ")
+
+  defp format_stage(_), do: "an unknown stage"
+
+  defp persist_checkpoint(sync_opts, next_page, summary) do
+    case Keyword.get(sync_opts, :on_checkpoint) do
+      nil ->
+        :ok
+
+      on_checkpoint when is_function(on_checkpoint, 1) ->
+        checkpoint = checkpoint(next_page, summary)
+
+        case on_checkpoint.(checkpoint) do
+          :ok -> :ok
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {:checkpoint_failed, reason}}
+          other -> {:error, {:checkpoint_failed, other}}
+        end
+    end
+  rescue
+    e -> {:error, {:checkpoint_failed, e}}
+  catch
+    kind, reason -> {:error, {:checkpoint_failed, {kind, reason}}}
+  end
+
+  defp checkpoint(next_page, summary) do
+    %{
+      "page" => next_page,
+      "synced" => summary.synced,
+      "filtered" => summary.filtered,
+      "errors_count" => summary.errors_count,
+      "errors" =>
+        summary.errors
+        |> stored_errors()
+        |> Enum.map(fn error ->
+          %{"article" => error.article, "reason" => error.reason}
+        end)
+    }
+  end
+
   defp try_import(post, opts) do
     case EmbedHelper.import_article(post, opts) do
       {:ok, :filtered_out} -> :filtered
@@ -320,8 +499,16 @@ defmodule Bonfire.Ghost.Sync.Articles do
       {:error, {kind, reason}}
   end
 
-  defp import_timeout,
-    do: Config.get([:bonfire_ghost, :article_import_timeout], @default_import_timeout)
+  defp import_timeout do
+    case Config.get([:bonfire_ghost, :article_import_timeout], @default_import_timeout) do
+      timeout when is_integer(timeout) and timeout > 0 ->
+        timeout
+
+      invalid_timeout ->
+        warn(invalid_timeout, "Invalid Ghost article import timeout; using the default")
+        @default_import_timeout
+    end
+  end
 
   defp article_label(post), do: post["url"] || post["slug"] || post["id"] || "?"
 

@@ -10,16 +10,26 @@ defmodule Bonfire.Ghost.Workers.ArticleSyncWorker do
   use Oban.Worker,
     queue: :ghost_webhooks,
     max_attempts: 3,
-    unique: [period: 300, states: [:available, :scheduled, :executing, :retryable]]
+    unique: [period: :infinity, states: :incomplete]
 
   import Untangle
 
   alias Bonfire.Ghost.Sync.Articles
 
+  @checkpoint_key "article_sync_checkpoint"
+
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args, attempt: attempt, max_attempts: max_attempts})
+  def perform(%Oban.Job{args: args, attempt: attempt, max_attempts: max_attempts} = job)
       when is_map(args) do
-    case Articles.sync_all([]) do
+    checkpoint = Map.get(job.meta || %{}, @checkpoint_key)
+
+    sync_opts = [
+      checkpoint: checkpoint,
+      job_id: job.id,
+      on_checkpoint: &persist_checkpoint(job.id, &1)
+    ]
+
+    case Articles.sync_all(sync_opts) do
       {:ok, summary} ->
         info(summary, "Ghost article backfill complete")
         warn_errors(summary)
@@ -32,8 +42,7 @@ defmodule Bonfire.Ghost.Workers.ArticleSyncWorker do
       {:error, reason} = e ->
         error(reason, "Ghost article backfill failed")
 
-        # `sync_all` already stored a :failed status; refine it with retry info so the
-        # settings page can say "retrying (attempt 1 of 3)" instead of a dead-end error.
+        # Preserve the failure details while exposing whether Oban will retry it.
         Articles.put_status(
           Map.merge(Articles.status() || %{}, %{
             state: if(attempt < max_attempts, do: :retrying, else: :failed),
@@ -56,4 +65,16 @@ defmodule Bonfire.Ghost.Workers.ArticleSyncWorker do
     do: warn(errors, "Ghost article backfill finished with per-article errors")
 
   defp warn_errors(_summary), do: :ok
+
+  # Persist only completed pages so a retry cannot inflate counts from a partial page.
+  defp persist_checkpoint(nil, _checkpoint), do: {:error, :missing_job_id}
+
+  defp persist_checkpoint(job_id, checkpoint) do
+    case Oban.update_job(job_id, fn job ->
+           %{meta: Map.put(job.meta || %{}, @checkpoint_key, checkpoint)}
+         end) do
+      {:ok, _job} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 end

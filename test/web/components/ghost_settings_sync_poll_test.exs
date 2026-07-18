@@ -111,4 +111,9 @@ defmodule Bonfire.Ghost.Web.GhostSettingsSyncPollTest do
              })
     end
   end
+
+  test "describes the current import stage without requiring server logs" do
+    assert GhostSettingsLive.sync_stage_label(:updating_boundaries) =~ "visibility"
+    assert GhostSettingsLive.sync_stage_label(:unknown) =~ "unknown"
+  end
 end

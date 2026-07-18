@@ -52,4 +52,57 @@ defmodule Bonfire.Ghost.Workers.ArticleSyncWorkerTest do
     assert {:cancel, :not_configured} =
              ArticleSyncWorker.perform(%Oban.Job{args: %{}, attempt: 1, max_attempts: 3})
   end
+
+  test "loads the durable checkpoint from job metadata and persists the next completed page" do
+    test_pid = self()
+
+    checkpoint = %{
+      "page" => 4,
+      "synced" => 150,
+      "filtered" => 10,
+      "errors_count" => 0,
+      "errors" => []
+    }
+
+    Repatch.patch(Oban, :update_job, fn 123, update_fun ->
+      job = %Oban.Job{id: 123, args: %{}, meta: %{"kept" => true}}
+      changes = update_fun.(job)
+      send(test_pid, {:job_changes, changes})
+      {:ok, struct(job, changes)}
+    end)
+
+    Repatch.patch(Articles, :sync_all, fn opts ->
+      assert Keyword.fetch!(opts, :checkpoint) == checkpoint
+      assert Keyword.fetch!(opts, :job_id) == 123
+
+      assert :ok =
+               Keyword.fetch!(opts, :on_checkpoint).(%{
+                 "page" => 5,
+                 "synced" => 200,
+                 "filtered" => 10,
+                 "errors_count" => 0,
+                 "errors" => []
+               })
+
+      Articles.put_status(%{state: :done, synced: 200, filtered: 10, errors_count: 0, errors: []})
+      {:ok, %{synced: 200, filtered: 10, errors_count: 0, errors: []}}
+    end)
+
+    assert :ok =
+             ArticleSyncWorker.perform(%Oban.Job{
+               id: 123,
+               args: %{},
+               meta: %{"article_sync_checkpoint" => checkpoint},
+               attempt: 2,
+               max_attempts: 3
+             })
+
+    assert_receive {:job_changes,
+                    %{
+                      meta: %{
+                        "kept" => true,
+                        "article_sync_checkpoint" => %{"page" => 5, "synced" => 200}
+                      }
+                    }}
+  end
 end

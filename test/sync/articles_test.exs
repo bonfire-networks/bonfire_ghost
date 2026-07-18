@@ -167,8 +167,13 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       # Shrink the watchdog so the test doesn't wait 2 minutes.
       Repatch.patch(Articles, :import_timeout, fn -> 100 end)
 
-      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn post, _opts ->
-        if post["id"] == "stuck", do: Process.sleep(:infinity)
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn post, opts ->
+        if post["id"] == "stuck" do
+          Keyword.fetch!(opts, :on_stage).(:updating_boundaries)
+          Articles.put_status(%{stage: :incorrect_shared_cache_stage})
+          Process.sleep(:infinity)
+        end
+
         {:ok, :post}
       end)
 
@@ -180,10 +185,26 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
                Articles.sync_all()
 
       assert reason =~ "timed out"
+      assert reason =~ "during updating boundaries"
+      assert reason =~ "Worker stack:"
 
       assert %{state: :done, synced: 2, errors_count: 1, errors: [err]} = Articles.status()
       assert err.article == "https://blog.test/stuck/"
       assert err.reason =~ "timed out"
+      assert err.reason =~ "during updating boundaries"
+    end
+
+    test "falls back safely when the article timeout setting is invalid" do
+      Process.put([:bonfire_ghost, :article_import_timeout], "not-a-timeout")
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
+        {:ok, :post}
+      end)
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, _opts -> page([post("ok")], nil) end)
+
+      assert {:ok, %{synced: 1, errors: []}} = Articles.sync_all()
     end
 
     test "an article import that raises is recorded as an error without aborting the backfill" do
@@ -204,6 +225,26 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       assert %{state: :done, synced: 1, errors_count: 1, errors: [err]} = Articles.status()
       assert err.article == "https://blog.test/boom/"
       assert err.reason =~ "kaboom"
+    end
+
+    test "an article process killed with an untrappable exit does not abort the backfill" do
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn post, _opts ->
+        if post["id"] == "killed", do: Process.exit(self(), :kill)
+        {:ok, :post}
+      end)
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, _opts ->
+        page([post("killed"), post("ok")], nil)
+      end)
+
+      assert {:ok, %{synced: 1, errors: [{"https://blog.test/killed/", reason}]}} =
+               Articles.sync_all()
+
+      assert reason =~ "Import process crashed"
+      assert %{state: :done, synced: 1, errors_count: 1} = Articles.status()
     end
 
     test "records per-article errors with a readable reason" do
@@ -265,8 +306,8 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
     end
   end
 
-  describe "resume (never restart an interrupted sweep from page 1)" do
-    test "resumes from the page the previous interrupted run reached, carrying counts forward" do
+  describe "durable completed-page checkpoints" do
+    test "resumes from the worker checkpoint and carries counts forward" do
       test_pid = self()
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
@@ -275,16 +316,15 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
         {:ok, :post}
       end)
 
-      # A prior attempt got interrupted mid-sweep: it had reached page 3 with 120 done.
-      Articles.put_status(%{
-        state: :failed,
-        reason: "nxdomain",
-        page: 3,
-        synced: 120,
-        filtered: 5,
-        errors_count: 0,
-        errors: []
-      })
+      checkpoint = %{
+        "page" => 3,
+        "synced" => 120,
+        "filtered" => 5,
+        "errors_count" => 1,
+        "errors" => [
+          %{"article" => "https://blog.test/old-error/", "reason" => "timed out"}
+        ]
+      }
 
       Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
         page = Keyword.fetch!(opts, :page)
@@ -296,7 +336,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
         end
       end)
 
-      assert {:ok, summary} = Articles.sync_all()
+      assert {:ok, summary} = Articles.sync_all(checkpoint: checkpoint)
 
       # It picked up at page 3 — pages 1 and 2 were never re-fetched.
       assert_receive {:fetched_page, 3}
@@ -307,10 +347,18 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       # Counts continue from the prior run (120 + the 2 newly imported), not from 0.
       assert summary.synced == 122
       assert summary.filtered == 5
-      assert %{state: :done, synced: 122, filtered: 5} = Articles.status()
+      assert summary.errors_count == 1
+
+      assert %{
+               state: :done,
+               synced: 122,
+               filtered: 5,
+               errors_count: 1,
+               errors: [%{article: "https://blog.test/old-error/"}]
+             } = Articles.status()
     end
 
-    test "starts fresh (page 1) after a previous run finished cleanly" do
+    test "does not treat volatile UI status as a resume checkpoint" do
       test_pid = self()
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
@@ -318,7 +366,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
         {:ok, :post}
       end)
 
-      Articles.put_status(%{state: :done, page: 9, synced: 400, filtered: 0, errors: []})
+      Articles.put_status(%{state: :failed, page: 9, synced: 400, filtered: 0, errors: []})
 
       Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
         send(test_pid, {:fetched_page, Keyword.fetch!(opts, :page)})
@@ -329,7 +377,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       assert_receive {:fetched_page, 1}
     end
 
-    test "`restart: true` forces a clean full sweep even after an interrupted run" do
+    test "`restart: true` ignores a supplied durable checkpoint" do
       test_pid = self()
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
@@ -337,15 +385,64 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
         {:ok, :post}
       end)
 
-      Articles.put_status(%{state: :failed, page: 5, synced: 200, filtered: 0, errors: []})
+      checkpoint = %{"page" => 5, "synced" => 200, "filtered" => 0, "errors" => []}
 
       Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
         send(test_pid, {:fetched_page, Keyword.fetch!(opts, :page)})
         page([post("a")], nil)
       end)
 
-      assert {:ok, %{synced: 1}} = Articles.sync_all(restart: true)
+      assert {:ok, %{synced: 1}} = Articles.sync_all(checkpoint: checkpoint, restart: true)
       assert_receive {:fetched_page, 1}
+    end
+
+    test "persists the next page only after the current page completes" do
+      test_pid = self()
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
+        {:ok, :post}
+      end)
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, opts ->
+        case Keyword.fetch!(opts, :page) do
+          1 -> page([post("a"), post("b")], 2)
+          2 -> page([post("c")], nil)
+        end
+      end)
+
+      on_checkpoint = fn checkpoint ->
+        send(test_pid, {:checkpoint, checkpoint})
+        :ok
+      end
+
+      assert {:ok, %{synced: 3}} = Articles.sync_all(on_checkpoint: on_checkpoint)
+
+      assert_receive {:checkpoint,
+                      %{
+                        "page" => 2,
+                        "synced" => 2,
+                        "filtered" => 0,
+                        "errors_count" => 0
+                      }}
+
+      refute_received {:checkpoint, %{"page" => 1}}
+    end
+
+    test "fails for retry when a durable checkpoint cannot be saved" do
+      Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+      Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+      Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
+        {:ok, :post}
+      end)
+
+      Repatch.patch(AdminAPI, :list_posts, fn :client, _opts -> page([post("a")], 2) end)
+
+      assert {:error, {:checkpoint_failed, :database_unavailable}} =
+               Articles.sync_all(on_checkpoint: fn _ -> {:error, :database_unavailable} end)
+
+      assert %{state: :failed, reason: reason, synced: 1} = Articles.status()
+      assert reason =~ "checkpoint_failed"
     end
   end
 end

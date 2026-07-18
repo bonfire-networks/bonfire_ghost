@@ -138,10 +138,9 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   @doc """
   Whether an in-flight backfill has stopped writing its heartbeat (job died or hung).
 
-  When true the UI warns and re-enables the sync button: re-clicking either restarts the
-  import (the `ghost_webhooks` queue runs 2 jobs, so a wedged one can't block a fresh
-  one) or — if the old job is genuinely still executing and recent — Oban's uniqueness
-  reports "already running" instead.
+  When true the UI warns and re-enables the sync button. Re-clicking asks Oban to start a
+  replacement only when the old job is terminal; an incomplete job remains globally unique,
+  so it can never run concurrently with a replacement.
   """
   def sync_stalled?(status) do
     sync_in_flight?(status) and
@@ -163,6 +162,22 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   @doc "Capped list of per-article import errors (`%{article: label, reason: string}`)."
   def sync_errors(%{errors: errors}) when is_list(errors), do: errors
   def sync_errors(_), do: []
+
+  @doc "Human-readable label for the importer stage exposed by the watchdog."
+  def sync_stage_label(:starting), do: l("starting the article import")
+  def sync_stage_label(:filtering), do: l("checking the tag filter")
+  def sync_stage_label(:looking_up_existing_post), do: l("looking up the existing Bonfire post")
+  def sync_stage_label(:unhiding_existing_post), do: l("restoring the existing post")
+  def sync_stage_label(:resolving_author), do: l("resolving the article author")
+  def sync_stage_label(:resolving_destination), do: l("resolving the destination group or topic")
+  def sync_stage_label(:authorizing_destination), do: l("checking destination permissions")
+  def sync_stage_label(:publishing_post), do: l("publishing the Bonfire post")
+  def sync_stage_label(:saving_canonical_uri), do: l("saving the canonical Ghost URL")
+  def sync_stage_label(:editing_post), do: l("updating the Bonfire post content")
+  def sync_stage_label(:loading_updated_post), do: l("loading the updated Bonfire post")
+  def sync_stage_label(:updating_boundaries), do: l("updating article visibility and boundaries")
+  def sync_stage_label(:routing_to_destination), do: l("routing the article to its destination")
+  def sync_stage_label(_), do: l("an unknown import stage")
 
   # Gate on the same permission the settings write path enforces (`can?(:configure, :instance)`).
   defp authorized?(socket) do

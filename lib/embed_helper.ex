@@ -106,13 +106,17 @@ defmodule Bonfire.Ghost.EmbedHelper do
   """
   def import_article(article, opts \\ []) do
     url = e(article, "url", nil)
+    report_import_stage(opts, :filtering)
 
     case check_auto_import_tag_filter(article, opts) do
       :ok ->
+        report_import_stage(opts, :looking_up_existing_post)
+
         case url && Peered.get_by_uri(url) do
           {:ok, %{id: existing_id}} ->
             info(existing_id, "found an existing post for article — updating")
             # un-hide in case it had been unpublished before
+            report_import_stage(opts, :unhiding_existing_post)
             maybe_unhide(existing_id)
             update_post_from_article(existing_id, article, opts)
 
@@ -349,15 +353,19 @@ defmodule Bonfire.Ghost.EmbedHelper do
     require_topic? = Keyword.get(opts, :require_topic, configured_require_topic())
     boundary_opt = Keyword.get(opts, :boundary, nil)
 
-    with {:ok, author} <- require_author(article, opts),
+    with :ok <- report_import_stage(opts, :resolving_author),
+         {:ok, author} <- require_author(article, opts),
+         :ok <- report_import_stage(opts, :resolving_destination),
          {context_type, context} <- resolve_context(group_id, article),
          :ok <- check_topic_requirement(require_topic?, context_type),
+         :ok <- report_import_stage(opts, :authorizing_destination),
          :ok <- ensure_author_can_post(author, context, group_id),
          %{boundary: boundary, to_circles: to_circles} <-
            article_boundary_attrs(article, context, boundary_opt),
          context_id = (context && Enums.id(context)) || nil,
          published = e(article, "published_at", nil),
          post_id = (published && DatesTimes.generate_ulid_if_past(published)) || nil,
+         :ok <- report_import_stage(opts, :publishing_post),
          {:ok, post} <-
            Bonfire.Posts.publish(
              current_user: author,
@@ -380,13 +388,16 @@ defmodule Bonfire.Ghost.EmbedHelper do
                uploaded_media: primary_image_attachment(article)
              }
            ) do
+      report_import_stage(opts, :saving_canonical_uri)
       maybe_save_canonical_uri(post, url)
       {:ok, post}
     end
   end
 
   defp update_post_from_article(post_id, article, opts) do
-    with {:ok, author} <- require_author(article, opts),
+    with :ok <- report_import_stage(opts, :resolving_author),
+         {:ok, author} <- require_author(article, opts),
+         :ok <- report_import_stage(opts, :editing_post),
          {:ok, _updated} <-
            Bonfire.Social.PostContents.edit(author, post_id, %{
              post_content: %{
@@ -395,13 +406,33 @@ defmodule Bonfire.Ghost.EmbedHelper do
                html_body: article["html"] || ""
              }
            }),
+         :ok <- report_import_stage(opts, :loading_updated_post),
          {:ok, post} <- read_imported(post_id, author),
+         :ok <- report_import_stage(opts, :updating_boundaries),
          :ok <- update_article_boundaries(author, article, post, opts) do
-      # A content edit doesn't (re)apply topic routing, so re-apply the (idempotent) auto-boost
-      # in case the article was first imported before `post_into_group`/tag perms were in place.
+      # Content edits do not reapply topic routing, so retry the idempotent route operation.
+      report_import_stage(opts, :routing_to_destination)
       maybe_route_into_context(author, article, post, opts)
       {:ok, post}
     end
+  end
+
+  # Stage reporting is best-effort because diagnostics must not break an import.
+  defp report_import_stage(opts, stage) do
+    case Keyword.get(opts, :on_stage) do
+      on_stage when is_function(on_stage, 1) -> on_stage.(stage)
+      _ -> :ok
+    end
+
+    :ok
+  rescue
+    e ->
+      warn(e, "Could not report Ghost article import stage")
+      :ok
+  catch
+    kind, reason ->
+      warn({kind, reason}, "Could not report Ghost article import stage")
+      :ok
   end
 
   defp update_article_boundaries(author, article, post, opts) do

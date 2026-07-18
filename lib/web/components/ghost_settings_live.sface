@@ -226,9 +226,6 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               </div>
             {/if}
 
-            {!-- One-off backfill of articles published before webhooks were set up.
-               Explicit operator action — runs regardless of the auto-import toggle,
-               but honors the author/group/tag/topic settings above. Idempotent. --}
             <div class="divider my-0" />
 
             <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -259,9 +256,6 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               {/if}
             </div>
 
-            {!-- Live status of the background backfill: the worker writes progress to the
-               cache after every article and this panel polls it every 2s while running,
-               so imports are no longer a black box that only reports to server logs. --}
             {#if @article_sync_status}
               <div
                 id="ghost-article-sync-status"
@@ -276,7 +270,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                     <div class="flex items-start gap-2 text-warning">
                       <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0 mt-0.5" />
                       <span>{l(
-                          "Still not picked up since %{date} — the background worker may be down or its queue full. Check the server logs, or use the button above to queue it again.",
+                          "Still not picked up since %{date} — the background worker may be unavailable. Ask the server operator to restart background processing; this persisted job will then continue automatically.",
                           date: format_time_ago(@article_sync_status[:updated_at])
                         )}</span>
                     </div>
@@ -298,11 +292,16 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                       {l("Currently importing: %{article}", article: @article_sync_status[:current])}
                     </div>
                   {/if}
+                  {#if @article_sync_status[:stage]}
+                    <div class="text-muted">
+                      {l("Current stage: %{stage}", stage: sync_stage_label(@article_sync_status[:stage]))}
+                    </div>
+                  {/if}
                   {#if sync_stalled?(@article_sync_status)}
                     <div class="flex items-start gap-2 text-warning">
                       <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0 mt-0.5" />
                       <span>{l(
-                          "No progress since %{date} — the import appears to be stuck, likely on the article shown above. Check the server logs, then use the button above to start it again (already-imported articles are simply updated).",
+                          "No progress since %{date} — the import appears to be stuck at the stage shown above. Ask the server operator to restart background processing; completed pages are checkpointed and resume automatically.",
                           date: format_time_ago(@article_sync_status[:updated_at])
                         )}</span>
                     </div>
@@ -353,11 +352,11 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                       {#for err <- sync_errors(@article_sync_status)}
                         <li class="break-all">
                           <span class="font-medium">{err[:article]}</span>
-                          <span class="text-muted">— {err[:reason]}</span>
+                          <span class="text-muted whitespace-pre-wrap">— {err[:reason]}</span>
                         </li>
                       {/for}
                       {#if sync_count(@article_sync_status, :errors_count) > length(sync_errors(@article_sync_status))}
-                        <li class="text-muted">{l("…only the %{count} most recent errors are kept — see server logs for the full list.",
+                        <li class="text-muted">{l("…the %{count} most recent error details are shown here.",
                             count: length(sync_errors(@article_sync_status))
                           )}</li>
                       {/if}
