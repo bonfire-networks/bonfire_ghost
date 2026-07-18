@@ -309,7 +309,8 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   {#if sync_state(@article_sync_status) == :retrying}
                     <div class="flex items-center gap-2 text-warning">
                       <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0" />
-                      <span>{l("Fetching from Ghost failed (%{reason}) — retrying automatically (attempt %{attempt} of %{max})…",
+                      <span>{l(
+                          "Fetching from Ghost failed (%{reason}) — retrying automatically (attempt %{attempt} of %{max})…",
                           reason: @article_sync_status[:reason] || "?",
                           attempt: @article_sync_status[:attempt] || 1,
                           max: @article_sync_status[:max_attempts] || "?"

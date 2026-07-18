@@ -133,6 +133,7 @@ defmodule Bonfire.Ghost.Web.GatedLoginFlowTest do
 
     Repatch.patch(Ghost, :admin_configured?, fn -> true end)
     Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
     Repatch.patch(AdminAPI, :get_member_by_email, fn :client, _email, _opts ->
       {:ok, %{"members" => []}}
     end)

@@ -625,9 +625,8 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
         Accounts.get_by_email(email)
         |> Bonfire.Common.Repo.maybe_preload(:settings)
 
-      assert Bonfire.Common.Settings.get([:bonfire_ghost, :member], nil,
-               current_account: account
-             ) == nil
+      assert Bonfire.Common.Settings.get([:bonfire_ghost, :member], nil, current_account: account) ==
+               nil
 
       assert Bonfire.Common.Settings.get([Bonfire.Me.Users, :suggested_profile_name], nil,
                current_account: account

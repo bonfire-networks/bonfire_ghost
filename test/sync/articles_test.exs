@@ -23,6 +23,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
     test "paginates across pages and counts synced articles" do
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -65,6 +66,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
     test "advances pagination when Ghost returns a stringified next page" do
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -82,6 +84,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
     test "stops instead of looping when pagination does not advance" do
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -104,6 +107,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       Repatch.patch(Ghost, :admin_configured?, fn -> false end)
       Repatch.patch(Ghost, :configured?, fn -> true end)
       Repatch.patch(Ghost, :client, fn -> {:ok, :content_client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -145,15 +149,15 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       assert_receive {:mid_run_status, "a", %{state: :running, page: 1, synced: 0}}
 
       assert_receive {:mid_run_status, "b",
-                      %{
-                        state: :running,
-                        page: 1,
-                        synced: 1,
-                        # which article is being imported right now + a heartbeat, so the
-                        # settings page can name the culprit if the import wedges
-                        current: "https://blog.test/b/",
-                        updated_at: %DateTime{}
-                      }}
+       %{
+         state: :running,
+         page: 1,
+         synced: 1,
+         # which article is being imported right now + a heartbeat, so the
+         # settings page can name the culprit if the import wedges
+         current: "https://blog.test/b/",
+         updated_at: %DateTime{}
+       }}
 
       assert_receive {:mid_run_status, "c", %{state: :running, page: 2, synced: 2}}
 
@@ -198,6 +202,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       Process.put([:bonfire_ghost, :article_import_timeout], "not-a-timeout")
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -291,6 +296,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
     test "caps the stored error list but keeps the full count" do
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:error, :boom}
       end)
@@ -362,6 +368,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       test_pid = self()
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -381,6 +388,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       test_pid = self()
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -400,6 +408,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
       test_pid = self()
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)
@@ -432,6 +441,7 @@ defmodule Bonfire.Ghost.Sync.ArticlesTest do
     test "fails for retry when a durable checkpoint cannot be saved" do
       Repatch.patch(Ghost, :admin_configured?, fn -> true end)
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
       Repatch.patch(EmbedHelper, :import_article, [mode: :shared], fn _post, _opts ->
         {:ok, :post}
       end)

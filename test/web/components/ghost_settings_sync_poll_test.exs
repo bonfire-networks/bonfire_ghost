@@ -85,7 +85,11 @@ defmodule Bonfire.Ghost.Web.GhostSettingsSyncPollTest do
     end
 
     test "an in-flight status whose heartbeat is old means the job died or hung" do
-      status = %{state: :running, synced: 1, updated_at: DateTime.add(DateTime.utc_now(), -10, :minute)}
+      status = %{
+        state: :running,
+        synced: 1,
+        updated_at: DateTime.add(DateTime.utc_now(), -10, :minute)
+      }
 
       assert GhostSettingsLive.sync_stalled?(status)
 
