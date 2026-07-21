@@ -12,6 +12,11 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   they don't appear in the Members API and Ghost emits no webhooks for them, so when
   the member lookup misses we fall back to a staff lookup. Staff bypass the
   `required_tier` gate — they're the site's own team and have no tiers to gate on.
+
+  Note this path only runs for emails with **no local account** — an existing account
+  always gets its magic link without Ghost being consulted. That is only safe because
+  the tier gate (`Bonfire.Ghost.TierGate`) is now enforced on every path that can
+  *create* an account, i.e. in `Bonfire.Ghost.Sync.Members.provision_from_ghost_member/2`.
   """
   @behaviour Bonfire.UI.Me.LoginEmailProvider
 
@@ -20,9 +25,6 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
   alias Bonfire.Ghost
   alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Sync.Members
-  alias Bonfire.Common.Settings
-  require Bonfire.Common.Settings
-  use Bonfire.Common.E
   use Bonfire.Common.Config
 
   # Shape check only, to keep junk input (this runs on the raw, unvalidated forgot-password field)
@@ -66,7 +68,11 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
     case AdminAPI.get_user_by_email(client, email) do
       {:ok, %{"users" => [staff | _]}} ->
         if AdminAPI.staff_active?(staff) do
-          Members.provision_from_ghost_staff(staff)
+          # identities that split before the identity link existed get reconnected
+          # to their stranded account instead of forking yet another one (the
+          # client lets it verify an unlabelled account isn't a member's)
+          Members.claim_split_author(staff, client: client) ||
+            Members.provision_from_ghost_staff(staff)
         else
           info(email, "Ghost staff exists but is suspended/locked — not provisioning")
           :no_match
@@ -80,29 +86,9 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
     end
   end
 
-  defp tier_allowed?(member) do
-    # MUST be `Settings.get(..., :instance)`: `Config.get/3`'s 3rd arg is an **otp_app**, not a
-    # scope, so it would read a non-existent `:instance` app, always return the default, and let
-    # every member through the gate. The settings UI writes these at instance scope.
-    required_map =
-      Settings.get([:bonfire_ghost, :required_tier], %{}, :instance) || %{}
-
-    # not `v == true`: the settings toggle can store the string "true" (cf. auto_import_enabled?/0),
-    # which would leave required_slugs empty and again let every member through
-    required_slugs =
-      required_map
-      |> Enum.filter(fn {_, v} -> v in [true, "true", "1", "yes"] end)
-      |> Enum.map(fn {k, _} -> to_string(k) end)
-
-    if required_slugs == [] do
-      true
-    else
-      member_slugs =
-        e(member, "tiers", [])
-        |> Enum.map(&e(&1, "slug", nil))
-        |> Enum.reject(&is_nil/1)
-
-      Enum.any?(member_slugs, &(&1 in required_slugs))
-    end
-  end
+  # The gate itself lives in `Bonfire.Ghost.TierGate` — it is enforced on every
+  # provisioning path (webhooks, backfill), not just this one. Checking it here too
+  # keeps the staff fallback below reachable: a member who fails the gate may still
+  # be staff.
+  defp tier_allowed?(member), do: Bonfire.Ghost.TierGate.allowed?(member)
 end

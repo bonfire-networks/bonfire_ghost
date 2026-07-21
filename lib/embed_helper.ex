@@ -775,6 +775,13 @@ defmodule Bonfire.Ghost.EmbedHelper do
   end
 
   defp fetch_and_provision_staff(ghost_id) do
+    # the persisted identity link wins: stable attribution across email changes
+    # and on accounts with several profiles, with no Ghost API round-trip
+    Bonfire.Ghost.Identities.staff_user(ghost_id) ||
+      fetch_and_provision_staff_via_api(ghost_id)
+  end
+
+  defp fetch_and_provision_staff_via_api(ghost_id) do
     with {:ok, c} <- Ghost.admin_client(),
          {:ok, ghost_staff} <- AdminAPI.get_user(c, ghost_id),
          # authors need a full identity to be attributed as a poster, so eagerly

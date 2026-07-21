@@ -3,8 +3,13 @@ defmodule Bonfire.Ghost.Sync.Members do
   Syncs Ghost members into Bonfire accounts + users + circle memberships.
 
   Called from `Bonfire.Ghost.Workers.MemberWebhookWorker` with a verified
-  Ghost member payload. Email is the join key — there is no persistent
-  Ghost↔Bonfire mapping table.
+  Ghost member payload. The Ghost ID is the primary join key (persisted per
+  person via `Bonfire.Ghost.Identities` — staff and member IDs on one row),
+  with email as the fallback for identities provisioned before the link
+  existed. An email change in Ghost therefore updates the existing account
+  instead of forking a duplicate — and an email changed on the Bonfire side is
+  respected (the link is ID-based, and sync only follows Ghost's email while
+  the local one still tracks it).
 
   - `provision_from_ghost_member/1` — idempotent upsert. Creates the Account
     (with a random high-entropy password — the member will use passwordless
@@ -29,8 +34,10 @@ defmodule Bonfire.Ghost.Sync.Members do
   alias Bonfire.Me.Accounts
   alias Bonfire.Me.Characters
   alias Bonfire.Me.Users
+  alias Bonfire.Data.Identity.Email
   alias Bonfire.Ghost
   alias Bonfire.Ghost.AdminAPI
+  alias Bonfire.Ghost.Identities
 
   @circle_prefix "ghost_tier:"
 
@@ -39,9 +46,13 @@ defmodule Bonfire.Ghost.Sync.Members do
   @members_include "tiers,labels,newsletters"
 
   @type diff :: %{added: non_neg_integer(), removed: non_neg_integer()}
-  @type sync_summary :: %{provisioned: non_neg_integer(), errors: [{String.t() | nil, term()}]}
+  @type sync_summary :: %{
+          provisioned: non_neg_integer(),
+          skipped: non_neg_integer(),
+          errors: [{String.t() | nil, term()}]
+        }
 
-  @empty_summary %{provisioned: 0, errors: []}
+  @empty_summary %{provisioned: 0, skipped: 0, errors: []}
 
   @doc """
   Backfills all Ghost members into local Bonfire accounts/users and synced `ghost_tier:*` circles.
@@ -77,7 +88,10 @@ defmodule Bonfire.Ghost.Sync.Members do
           {:ok, Bonfire.Data.Identity.User.t() | Bonfire.Data.Identity.Account.t()}
           | {:error, term()}
   def provision_from_ghost_staff(ghost_staff, opts \\ []) do
-    provision_from_ghost_member(ghost_staff, Keyword.put(opts, :reconcile_tiers, false))
+    provision_from_ghost_member(
+      ghost_staff,
+      Keyword.merge(opts, reconcile_tiers: false, ghost_kind: "staff")
+    )
   end
 
   @doc """
@@ -98,22 +112,37 @@ defmodule Bonfire.Ghost.Sync.Members do
   If the account already has user(s) (e.g. a member re-logging in after creating
   their profile, or a webhook for an existing member), their tier circles are
   reconciled even on the account-only path.
+
+  Members who do not hold one of the tiers required by
+  `Bonfire.Ghost.TierGate` are refused with `{:skip, :tier_not_allowed}`: no
+  account is created, and an existing one loses its `ghost_tier:*` circles but is
+  kept. Staff bypass the gate (see `provision_from_ghost_staff/2`); pass
+  `skip_tier_gate: true` to bypass it deliberately.
   """
   @spec provision_from_ghost_member(map(), keyword()) ::
           {:ok, Bonfire.Data.Identity.User.t() | Bonfire.Data.Identity.Account.t()}
+          | {:skip, :tier_not_allowed}
           | {:error, term()}
   def provision_from_ghost_member(ghost_member, opts \\ [])
 
   def provision_from_ghost_member(%{"email" => email} = ghost_member, opts)
       when is_binary(email) and email != "" do
-    if Keyword.get(opts, :create_user, false) do
-      with {:ok, new?, account} <- ensure_account(email),
-           {:ok, user} <- ensure_user(account, ghost_member, new?),
-           {:ok, _diff} <- maybe_reconcile_circles(user, ghost_member, opts) do
-        {:ok, user}
-      end
-    else
-      provision_account_only(ghost_member, email, opts)
+    cond do
+      tier_gated?(ghost_member, opts) ->
+        refuse_by_tier(ghost_member, email)
+
+      Keyword.get(opts, :create_user, false) ->
+        identity = lookup_identity(ghost_member, opts)
+
+        with {:ok, new?, account} <- resolve_account(identity, email),
+             {:ok, user} <- ensure_user(account, ghost_member, new?, e(identity, :user_id, nil)),
+             {:ok, _diff} <- maybe_reconcile_circles(user, ghost_member, opts) do
+          record_identity(ghost_member, account, user, opts)
+          {:ok, user}
+        end
+
+      true ->
+        provision_account_only(ghost_member, email, opts)
     end
   end
 
@@ -135,12 +164,18 @@ defmodule Bonfire.Ghost.Sync.Members do
     account = e(user, :accounted, :account, nil)
     email = account_email(account)
 
-    with true <- ghost_provisioned?(account),
-         email when is_binary(email) and email != "" <- email,
-         {:ok, c} <- Ghost.admin_client(),
-         {:ok, %{"members" => [member | _]}} <-
-           AdminAPI.get_member_by_email(c, email, include: "tiers") do
-      reconcile_circles(user, member)
+    # An account is Ghost-provisioned iff we stashed the member context on it at login.
+    stash = ghost_stash(account)
+
+    if not is_nil(stash) do
+      complete_identity_link(stash, account, user)
+
+      with email when is_binary(email) and email != "" <- email,
+           {:ok, c} <- Ghost.admin_client(),
+           {:ok, %{"members" => [member | _]}} <-
+             AdminAPI.get_member_by_email(c, email, include: "tiers") do
+        reconcile_circles(user, member)
+      end
     end
 
     :ok
@@ -150,9 +185,28 @@ defmodule Bonfire.Ghost.Sync.Members do
       :ok
   end
 
-  # An account is Ghost-provisioned iff we stashed the member context on it at login.
-  defp ghost_provisioned?(account) do
-    not is_nil(Settings.get([:bonfire_ghost, :member], nil, current_account: account))
+  # The context stashed on an account when Ghost provisioned it (its presence is what
+  # marks the account as Ghost-provisioned), or nil.
+  defp ghost_stash(account) do
+    Settings.get([:bonfire_ghost, :member], nil, current_account: account)
+  end
+
+  # Completes the identity link with the freshly-created profile — the person creating
+  # it IS the member/staffer the account was provisioned for. Accounts stashed before
+  # the identity table existed carry no ghost_id; those get linked on their next
+  # provisioning touch instead.
+  defp complete_identity_link(stash, account, user) do
+    case e(stash, :ghost_id, nil) do
+      nil ->
+        :ok
+
+      ghost_id ->
+        # Settings atomizes stashed string values on read (e.g. "staff" → :staff)
+        case to_string(e(stash, :kind, "member")) do
+          "staff" -> Identities.link(account, staff_id: to_string(ghost_id), user: user)
+          _ -> Identities.link(account, member_id: to_string(ghost_id), user: user)
+        end
+    end
   end
 
   defp account_email(account) do
@@ -162,21 +216,50 @@ defmodule Bonfire.Ghost.Sync.Members do
       |> e(:email, :email_address, nil)
   end
 
+  # --- Tier gate -----------------------------------------------------------
+
+  # Enforced HERE rather than at each call site so a new provisioning path cannot
+  # forget it: that omission is exactly what let free Ghost members in via the
+  # `member.added` webhook and the "Sync members" backfill while the login path
+  # (`Bonfire.Ghost.LoginEmailProvider`) checked correctly.
+  #
+  # Exempt: Ghost staff (a separate entity, no tiers — `provision_from_ghost_staff/2`
+  # owns that invariant) and explicit `skip_tier_gate: true` callers.
+  defp tier_gated?(ghost_member, opts) do
+    cond do
+      ghost_kind(opts) == "staff" -> false
+      Keyword.get(opts, :skip_tier_gate, false) -> false
+      true -> not Bonfire.Ghost.TierGate.allowed?(ghost_member, opts)
+    end
+  end
+
+  # No account is created. An account that already exists is NOT deleted — it only
+  # loses its `ghost_tier:*` circles, so a downgrade/cancellation revokes gated
+  # access without erasing anyone's identity or content.
+  defp refuse_by_tier(ghost_member, email) do
+    info(email, "Ghost member does not hold a required tier — not provisioning")
+    revoke_tier_circles(ghost_member, "tier gate")
+    {:skip, :tier_not_allowed}
+  end
+
   # Account-only: no auto-username. Reconcile circles only if a user already exists
   # (and `reconcile_tiers: false` — the staff paths — skips even that).
   defp provision_account_only(ghost_member, email, opts) do
-    with {:ok, _new?, account} <- ensure_account(email) do
+    identity = lookup_identity(ghost_member, opts)
+
+    with {:ok, _new?, account} <- resolve_account(identity, email) do
       case Users.by_account!(account) do
         [] ->
           # Stash only pre-profile: /create-user consumes the prefill, and re-stamping an
           # account that already has profiles would mark pre-existing (e.g. admin) accounts
           # as Ghost-provisioned and overwrite their suggested name on every backfill run.
-          stash_member_context(account, ghost_member)
+          stash_member_context(account, ghost_member, opts)
 
         users ->
           Enum.each(users, &maybe_reconcile_circles(&1, ghost_member, opts))
       end
 
+      record_identity(ghost_member, account, nil, opts)
       {:ok, account}
     end
   end
@@ -186,12 +269,14 @@ defmodule Bonfire.Ghost.Sync.Members do
   # which the after-signup hook uses to know whether to look up + attach `ghost_tier:*`
   # circles (tiers are fetched live from Ghost at profile-creation time — Settings drops
   # unregistered keys like a stashed tier list, and live is always current anyway).
-  defp stash_member_context(account, ghost_member) do
+  # The Ghost ID + kind ride along so the hook can complete the identity link with the
+  # freshly-created user without another Ghost API call.
+  defp stash_member_context(account, ghost_member, opts) do
     name = ghost_member["name"]
 
     Settings.put(
       [:bonfire_ghost, :member],
-      %{name: name},
+      %{name: name, ghost_id: ghost_member["id"], kind: ghost_kind(opts)},
       scope: :account,
       current_account: account,
       skip_boundary_check: true
@@ -213,36 +298,140 @@ defmodule Bonfire.Ghost.Sync.Members do
   end
 
   @doc """
-  Handles `member.deleted` — removes the user from all `ghost_tier:*` circles.
-  The Bonfire Account and User(s) are preserved.
+  Best-effort reconnection for identities that split BEFORE the identity link existed: called at sign-in when an active Ghost staff record has no identity link and no local account matches the email — reconnects the stranded Ghost-provisioned account instead of forking a fresh one.
+
+  Deliberately conservative, because a wrong match hands one person's account to another: it rewrites the account's login email and signs the claimant in. ALL of these must hold: the staff slug resolves to a local username, that user's account carries the Ghost-provisioned stash marker, it is the account's only profile, and the account is not a *member's* (a subscriber who picked a colliding handle must never be claimed — checked against the stashed provisioning kind, and for accounts stashed before that kind was recorded, by confirming their address is not a Ghost member's).
+
+  Anything else returns nil and normal provisioning applies; stranded author-path accounts (which carry no stash marker) are repaired via the operator runbook instead. Pass `client:` to enable the legacy check — without it, unlabelled accounts are refused.
   """
-  @spec remove_member(map()) :: {:ok, %{removed: non_neg_integer()}} | {:error, term()}
-  def remove_member(%{"email" => email}) when is_binary(email) and email != "" do
-    with account when not is_nil(account) <- Accounts.get_by_email(email),
-         [_ | _] = users <- Users.by_account!(account) do
-      # a Ghost membership is keyed by email→account, so remove the tier circles
-      # from ALL of the account's profiles (mirrors the add side in provisioning)
-      removed =
-        Enum.reduce(users, 0, fn user, acc ->
-          {:ok, n} = do_remove(user, Enum.map(current_ghost_circles(user), & &1.id))
-          acc + n
-        end)
+  def claim_split_author(staff, opts \\ [])
 
-      {:ok, %{removed: removed}}
-    else
-      nil ->
-        info(email, "Ghost member.deleted — no local account, nothing to reconcile")
-        {:ok, %{removed: 0}}
+  def claim_split_author(%{"id" => ghost_id} = staff, opts)
+      when is_binary(ghost_id) and ghost_id != "" do
+    if is_nil(Identities.get_by_staff_id(ghost_id)) do
+      with %{} = user <- find_local_user_by_slug(staff["slug"]),
+           user <-
+             Bonfire.Common.Repo.maybe_preload(user, accounted: [account: [:email, :settings]]),
+           %{} = account <- e(user, :accounted, :account, nil),
+           [%{id: only_id}] <- Users.by_account!(account),
+           true <- only_id == user.id,
+           true <- claimable_staff_account?(account, opts) do
+        info(
+          "Reconnecting Ghost staff #{ghost_id} to the stranded local account of @#{e(user, :character, :username, nil)}"
+        )
 
-      [] ->
-        info(email, "Ghost member.deleted — account has no user, nothing to reconcile")
-        {:ok, %{removed: 0}}
+        current = e(account, :email, :email_address, nil)
+
+        account =
+          if is_binary(current) and current != staff["email"],
+            do: update_account_email(account, current, staff["email"]),
+            else: account
+
+        record_identity(staff, account, user, ghost_kind: "staff")
+        {:ok, account}
+      else
+        _ -> nil
+      end
     end
   end
 
-  def remove_member(ghost_member) do
-    error(ghost_member, "Ghost member.deleted payload missing email")
-    {:error, :missing_email}
+  def claim_split_author(_staff, _opts), do: nil
+
+  # The stash marks an account as Ghost-provisioned; its `kind` says provisioned as
+  # WHAT. Only staff accounts may be claimed by a staff sign-in. Accounts stashed
+  # before `kind` was recorded are ambiguous, so they are only claimable once Ghost
+  # confirms their address belongs to no member — fail closed without a client.
+  defp claimable_staff_account?(account, opts) do
+    case ghost_stash(account) do
+      nil ->
+        false
+
+      stash ->
+        case to_string(e(stash, :kind, "")) do
+          "staff" ->
+            true
+
+          "member" ->
+            false
+
+          _ ->
+            not member_email?(account_email(account), opts[:client])
+        end
+    end
+  end
+
+  defp member_email?(email, client) when is_binary(email) and email != "" and not is_nil(client) do
+    case AdminAPI.get_member_by_email(client, email) do
+      {:ok, %{"members" => [_ | _]}} -> true
+      {:ok, _} -> false
+      # an API error must not be read as "not a member"
+      _ -> true
+    end
+  end
+
+  defp member_email?(_email, _client), do: true
+
+  defp find_local_user_by_slug(slug) when is_binary(slug) and slug != "" do
+    [slug, String.replace(slug, "-", ""), String.replace(slug, "-", "_")]
+    |> Enum.uniq()
+    |> Enum.find_value(fn candidate ->
+      case Users.by_username(candidate) do
+        {:ok, user} -> user
+        _ -> nil
+      end
+    end)
+  end
+
+  defp find_local_user_by_slug(_), do: nil
+
+  @doc """
+  Handles `member.deleted` — removes the user from all `ghost_tier:*` circles.
+  The Bonfire Account and User(s) are preserved. Resolves the account by the
+  linked Ghost member ID first (so it still works after an email change on
+  either side), email as fallback.
+  """
+  @spec remove_member(map()) :: {:ok, %{removed: non_neg_integer()}} | {:error, term()}
+  def remove_member(%{} = ghost_member),
+    do: revoke_tier_circles(ghost_member, "member.deleted")
+
+  # Shared by `member.deleted` and by the tier gate (a member who no longer holds a
+  # required tier loses the gated circles but keeps their account — see the
+  # "Revocation stance" in docs/ghost-and-publishing.md).
+  defp revoke_tier_circles(%{} = ghost_member, because) do
+    email = ghost_member["email"]
+
+    if (is_binary(email) and email != "") or is_binary(ghost_member["id"]) do
+      with account when not is_nil(account) <- removed_member_account(ghost_member),
+           [_ | _] = users <- Users.by_account!(account) do
+        # remove the tier circles from ALL of the account's profiles (mirrors the add side)
+        removed =
+          Enum.reduce(users, 0, fn user, acc ->
+            {:ok, n} = do_remove(user, Enum.map(current_ghost_circles(user), & &1.id))
+            acc + n
+          end)
+
+        {:ok, %{removed: removed}}
+      else
+        nil ->
+          info(email, "Ghost #{because} — no local account, nothing to reconcile")
+          {:ok, %{removed: 0}}
+
+        [] ->
+          info(email, "Ghost #{because} — account has no user, nothing to reconcile")
+          {:ok, %{removed: 0}}
+      end
+    else
+      error(ghost_member, "Ghost #{because} payload missing email and id")
+      {:error, :missing_email}
+    end
+  end
+
+  defp removed_member_account(ghost_member) do
+    Identities.get_by_member_id(ghost_member["id"]) |> Identities.load_account() ||
+      case ghost_member["email"] do
+        email when is_binary(email) and email != "" -> Accounts.get_by_email(email)
+        _ -> nil
+      end
   end
 
   @doc """
@@ -434,6 +623,11 @@ defmodule Bonfire.Ghost.Sync.Members do
       {:ok, _user} ->
         Map.update!(summary, :provisioned, &(&1 + 1))
 
+      # refused by the tier gate — expected on a gated instance with free members,
+      # so it is counted rather than reported as an error
+      {:skip, _reason} ->
+        Map.update!(summary, :skipped, &(&1 + 1))
+
       {:error, reason} ->
         Map.update!(summary, :errors, &[{member_identity(member), reason} | &1])
     end
@@ -455,6 +649,99 @@ defmodule Bonfire.Ghost.Sync.Members do
   defp member_identity(_), do: nil
 
   # --- Account -------------------------------------------------------------
+
+  # Identity resolution for every provisioning path (login, webhooks, backfill,
+  # article import): the persisted Ghost-ID link wins over email, so an email
+  # change on EITHER side can no longer fork a duplicate identity. Email remains
+  # the fallback for identities provisioned before the link existed — which then
+  # get linked by `record_identity`.
+  defp lookup_identity(%{"id" => ghost_id}, opts) when is_binary(ghost_id) and ghost_id != "" do
+    case ghost_kind(opts) do
+      "staff" -> Identities.get_by_staff_id(ghost_id)
+      _ -> Identities.get_by_member_id(ghost_id)
+    end
+  end
+
+  defp lookup_identity(_ghost_member, _opts), do: nil
+
+  defp resolve_account(nil, email), do: ensure_account(email)
+
+  defp resolve_account(identity, email) do
+    case Identities.load_account(identity) do
+      # the linked account no longer exists (row should have cascaded, but fail safe)
+      nil -> ensure_account(email)
+      account -> {:ok, false, maybe_follow_ghost_email(account, identity, email)}
+    end
+  end
+
+  # Ghost changed the email AND the local email still tracks Ghost → follow it
+  # (Ghost already verified the new address, so no re-confirmation round).
+  # If the person changed their Bonfire email themselves (local ≠ last email seen
+  # from Ghost), their choice wins — the link is ID-based and survives regardless.
+  defp maybe_follow_ghost_email(account, identity, ghost_email) do
+    account = Bonfire.Common.Repo.maybe_preload(account, :email)
+    current = e(account, :email, :email_address, nil)
+    last_known = e(identity, :ghost_email, nil)
+
+    cond do
+      !is_binary(current) or current == ghost_email ->
+        account
+
+      # Only follow when the local address is demonstrably still the one Ghost last
+      # had. A missing `ghost_email` (a link recorded by id alone, e.g. an operator
+      # repair) is NOT consent to overwrite — that would silently undo the repair.
+      is_binary(last_known) and current == last_known ->
+        update_account_email(account, current, ghost_email)
+
+      true ->
+        info(
+          "Ghost email differs from the Bonfire account email, which was set locally (or predates the identity link) — keeping the local one"
+        )
+
+        account
+    end
+  end
+
+  # If the new address is taken by ANOTHER local account (e.g. the person also has a
+  # personal account — resolving that needs an admin decision), keep the old one.
+  defp update_account_email(account, current, new_email) do
+    case account.email
+         |> Email.changeset(%{email_address: new_email}, must_confirm?: false)
+         |> Bonfire.Common.Repo.update() do
+      {:ok, email_mixin} ->
+        info(
+          "Ghost email changed: updated the local account email from #{current} to #{new_email}"
+        )
+
+        %{account | email: email_mixin}
+
+      {:error, changeset} ->
+        warn(
+          changeset,
+          "Could not follow the Ghost email change to #{new_email} (already taken by another account?) — keeping #{current}"
+        )
+
+        account
+    end
+  end
+
+  defp record_identity(%{"id" => ghost_id} = ghost_member, account, user, opts)
+       when is_binary(ghost_id) and ghost_id != "" do
+    id_field = if ghost_kind(opts) == "staff", do: :staff_id, else: :member_id
+
+    case Identities.link(account, [
+           {id_field, ghost_id},
+           {:user, user},
+           {:ghost_email, ghost_member["email"]}
+         ]) do
+      {:ok, _} -> :ok
+      other -> warn(other, "Could not record the Ghost identity link")
+    end
+  end
+
+  defp record_identity(_ghost_member, _account, _user, _opts), do: :ok
+
+  defp ghost_kind(opts), do: Keyword.get(opts, :ghost_kind, "member")
 
   defp ensure_account(email) do
     case Accounts.get_by_email(email) do
@@ -479,13 +766,14 @@ defmodule Bonfire.Ghost.Sync.Members do
 
   # --- User ----------------------------------------------------------------
 
-  defp ensure_user(account, ghost_member, new? \\ false) do
+  # `preferred_user_id` is the identity link's user: on an account with several
+  # profiles, attribution must go to the linked author profile, not whichever
+  # user happens to come first.
+  defp ensure_user(account, ghost_member, new? \\ false, preferred_user_id \\ nil) do
     existing =
       if !new? do
-        case Users.by_account!(account) do
-          [user | _] -> user
-          [] -> nil
-        end
+        users = Users.by_account!(account)
+        Enum.find(users, &(&1.id == preferred_user_id)) || List.first(users)
       end
 
     case existing do

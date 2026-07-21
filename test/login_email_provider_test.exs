@@ -21,6 +21,26 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
 
   @email "member@example.test"
 
+  setup do
+    # The DB write is rolled back by the sandbox; what leaks between tests (and into other
+    # files) is the instance-settings cache in app config. It MUST be restored: since the
+    # tier gate moved into `Sync.Members.provision_from_ghost_member/2`, a leaked
+    # `required_tier` refuses provisioning in every later test file too (a whole wave of
+    # `{:skip, :tier_not_allowed}` in members_test/identities_test). A DB write in
+    # `on_exit` would fail anyway — sandbox ownership is already gone by then.
+    previous = Application.get_env(:bonfire_ghost, :required_tier)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:bonfire_ghost, :required_tier)
+      else
+        Application.put_env(:bonfire_ghost, :required_tier, previous)
+      end
+    end)
+
+    :ok
+  end
+
   defp member(tiers) do
     %{
       "id" => "ghost_member_1",

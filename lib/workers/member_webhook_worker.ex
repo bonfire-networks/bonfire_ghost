@@ -32,12 +32,22 @@ defmodule Bonfire.Ghost.Workers.MemberWebhookWorker do
     {:cancel, :invalid_args}
   end
 
-  defp dispatch("member.added", member), do: Members.provision_from_ghost_member(member)
-  defp dispatch("member.edited", member), do: Members.provision_from_ghost_member(member)
+  defp dispatch("member.added", member), do: provision(member)
+  defp dispatch("member.edited", member), do: provision(member)
   defp dispatch("member.deleted", member), do: Members.remove_member(member)
 
   defp dispatch(event, _member) do
     warn(event, "MemberWebhookWorker: unknown event — cancelling job")
     {:cancel, {:unknown_event, event}}
+  end
+
+  # A member without a required tier is a normal outcome on a gated instance, not a
+  # failure: cancel so Oban neither retries nor reports it. `{:skip, _}` is not one of
+  # Oban's recognised return values, so it must be translated here.
+  defp provision(member) do
+    case Members.provision_from_ghost_member(member) do
+      {:skip, reason} -> {:cancel, reason}
+      other -> other
+    end
   end
 end
