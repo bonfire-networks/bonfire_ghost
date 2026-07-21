@@ -531,7 +531,7 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
 
       Repatch.patch(AdminAPI, :list_users, fn :ghost_client, opts ->
         # suspended/locked staff are excluded server-side — the filter must always be sent
-        assert Keyword.fetch!(opts, :filter) == AdminAPI.active_staff_filter()
+        assert Keyword.fetch!(opts, :filter) == AdminAPI.signin_staff_filter()
 
         case Keyword.fetch!(opts, :page) do
           1 ->

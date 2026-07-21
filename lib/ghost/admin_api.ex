@@ -19,6 +19,11 @@ defmodule Bonfire.Ghost.AdminAPI do
 
   @token_expiry_seconds 5 * 60
 
+  # Page size and cap for the staff-by-email fallback scan (see `get_user_by_email/3`).
+  # Instances can have hundreds of contributors, so the scan is bounded.
+  @staff_page_size 100
+  @max_staff_scan_pages 20
+
   @doc """
   Creates a new Req client configured for the Ghost Admin API.
 
@@ -360,10 +365,23 @@ defmodule Bonfire.Ghost.AdminAPI do
   end
 
   @doc """
-  Gets a staff user by email address.
+  Gets a staff user by email address, returned in the same shape as `list_users/2`
+  (`{:ok, %{"users" => [user]}}`, or an empty list when nobody matches).
 
-  `email` is escaped before being interpolated into the NQL filter — on the gated-login
-  path it is raw, unvalidated user input (see `get_member_by_email/3`).
+  An NQL `email:` filter is attempted first as a fast path, but it is NOT authoritative:
+  observed against a real Ghost, `/users/?filter=email:'…'` matches nothing even for a
+  plain address on an active staff record (and `+`, NQL's AND operator, cannot be expressed
+  in it at all). A staffer wrongly reported as "not found" is told to buy a subscription
+  instead of being signed in, so **any** miss or error falls through to walking the staff
+  pages and matching locally — which is also case-insensitive.
+
+  The scan is capped at `#{@max_staff_scan_pages}` pages of `#{@staff_page_size}`. On an
+  instance with hundreds of contributors an unrecognised address therefore costs a handful
+  of requests; the sign-in form is rate-limited, which keeps that bounded.
+
+  Suspended and locked staff are intentionally still returned; `staff_active?/1` is what
+  decides whether they may be provisioned, so callers can tell "no such staff" apart from
+  "staff, but offboarded".
 
   ## Examples
 
@@ -371,35 +389,114 @@ defmodule Bonfire.Ghost.AdminAPI do
       {:ok, %{"users" => [%{...}]}}
   """
   def get_user_by_email(client, email, opts \\ []) when is_binary(email) do
-    list_users(
-      client,
-      Keyword.merge(opts, filter: "email:'#{escape_nql_string(email)}'", limit: 1)
-    )
+    filtered =
+      list_users(
+        client,
+        Keyword.merge(opts, filter: "email:'#{escape_nql_string(email)}'", limit: 1)
+      )
+
+    case filtered do
+      {:ok, %{"users" => [_ | _]}} ->
+        filtered
+
+      # includes API errors: the filter itself may be what Ghost rejected, and the scan
+      # propagates its own error if the problem is real (auth, permissions, outage)
+      _miss_or_error ->
+        scan_staff_by_email(client, String.downcase(email), 1, opts)
+    end
   end
 
-  # Ghost's active staff states (see Ghost core `models/user.js` `activeStates`): the `warn-*` states are active users with failed-login warnings; suspended staff are `"inactive"` and locked staff `"locked"`, and neither may authenticate against Ghost itself.
-  @active_staff_statuses ~w(active warn-1 warn-2 warn-3 warn-4)
+  defp scan_staff_by_email(_client, _wanted, page, _opts) when page > @max_staff_scan_pages do
+    warn("Gave up scanning Ghost staff pages for a plus-addressed or mixed-case email")
+    {:ok, %{"users" => []}}
+  end
+
+  defp scan_staff_by_email(client, wanted, page, opts) do
+    case list_users(client, Keyword.merge(opts, limit: @staff_page_size, page: page)) do
+      {:ok, %{"users" => users} = body} ->
+        case Enum.find(users, &email_matches?(&1, wanted)) do
+          nil ->
+            case next_page(body) do
+              nil -> {:ok, %{"users" => []}}
+              next -> scan_staff_by_email(client, wanted, next, opts)
+            end
+
+          user ->
+            {:ok, %{"users" => [user]}}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp email_matches?(%{"email" => email}, wanted) when is_binary(email),
+    do: String.downcase(email) == wanted
+
+  defp email_matches?(_user, _wanted), do: false
+
+  defp next_page(%{"meta" => %{"pagination" => %{"next" => next}}}) when is_integer(next),
+    do: next
+
+  defp next_page(%{"meta" => %{"pagination" => %{"next" => next}}}) when is_binary(next) do
+    case Integer.parse(next) do
+      {page, ""} -> page
+      _ -> nil
+    end
+  end
+
+  defp next_page(_body), do: nil
+
+  # Ghost staff states, per Ghost core `models/user.js`:
+  #   active, warn-1..warn-4 — can sign into Ghost (`warn-*` = failed-login warnings)
+  #   locked                 — "imported users, they get a random password"; they have simply
+  #                            never set a Ghost password, which says nothing about whether
+  #                            they still work here. On jacobin.social this is 1522 of 1535
+  #                            staff, i.e. essentially every bulk-imported contributor.
+  #   inactive               — "owner user before blog setup, suspended users"; suspending in
+  #                            the Ghost UI sets this. THE offboarding signal.
+  @ghost_active_statuses ~w(active warn-1 warn-2 warn-3 warn-4)
+  @signin_statuses @ghost_active_statuses ++ ~w(locked)
 
   @doc """
-  NQL filter fragment matching only active (non-suspended, non-locked) staff. Ghost's admin-context `/users/` browse returns suspended and locked staff by default, so any query used to grant access must filter them out explicitly.
+  NQL filter fragment matching staff who may be granted a Bonfire account — everything except suspended (`inactive`). Ghost's admin-context `/users/` browse returns suspended staff by default, so a query used to grant access must exclude them explicitly.
   """
-  def active_staff_filter, do: "status:[#{Enum.join(@active_staff_statuses, ",")}]"
+  def signin_staff_filter, do: "status:[#{Enum.join(@signin_statuses, ",")}]"
 
   @doc """
-  Whether a Ghost staff payload is an active (non-suspended, non-locked) user. Fails closed: a missing or unknown `"status"` counts as not active.
+  Whether a Ghost staff payload may be granted a Bonfire account.
+
+  Bonfire signs people in with its own magic link and never touches Ghost credentials, so `"locked"` (imported, no Ghost password set) is NOT a reason to refuse — those are ordinary contributors who have simply never logged into Ghost. Only suspension (`"inactive"`) withholds access. Fails closed: a missing or unknown `"status"` counts as not allowed.
+
+  ## Examples
+
+      iex> Bonfire.Ghost.AdminAPI.staff_may_sign_in?(%{"status" => "active"})
+      true
+
+      iex> Bonfire.Ghost.AdminAPI.staff_may_sign_in?(%{"status" => "locked"})
+      true
+
+      iex> Bonfire.Ghost.AdminAPI.staff_may_sign_in?(%{"status" => "inactive"})
+      false
+
+      iex> Bonfire.Ghost.AdminAPI.staff_may_sign_in?(%{})
+      false
+  """
+  def staff_may_sign_in?(user) when is_map(user), do: user["status"] in @signin_statuses
+  def staff_may_sign_in?(_), do: false
+
+  @doc """
+  Whether the staffer can authenticate against Ghost itself (i.e. has a usable Ghost password). Not the sign-in gate — see `staff_may_sign_in?/1`.
 
   ## Examples
 
       iex> Bonfire.Ghost.AdminAPI.staff_active?(%{"status" => "active"})
       true
 
-      iex> Bonfire.Ghost.AdminAPI.staff_active?(%{"status" => "inactive"})
-      false
-
-      iex> Bonfire.Ghost.AdminAPI.staff_active?(%{})
+      iex> Bonfire.Ghost.AdminAPI.staff_active?(%{"status" => "locked"})
       false
   """
-  def staff_active?(user) when is_map(user), do: user["status"] in @active_staff_statuses
+  def staff_active?(user) when is_map(user), do: user["status"] in @ghost_active_statuses
   def staff_active?(_), do: false
 
   @doc """

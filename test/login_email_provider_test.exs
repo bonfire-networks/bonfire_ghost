@@ -261,11 +261,16 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
       refute Bonfire.Me.Accounts.get_by_email(@email)
     end
 
-    test "a LOCKED staffer is not provisioned" do
+    test "a LOCKED staffer IS provisioned — 'locked' means imported, not offboarded" do
+      # Ghost's own `models/user.js`: "locked user: imported users, they get a random
+      # password". It means they never set a GHOST password, which is irrelevant here —
+      # Bonfire signs people in with its own magic link. Refusing them turned away 1522 of
+      # jacobin.social's 1535 contributors, i.e. every bulk-imported author, who were told
+      # to buy a subscription instead of reaching their own author profile.
       stub_members({:ok, %{"members" => []}}, {:ok, %{"users" => [staff("locked")]}})
 
-      assert :no_match = LoginEmailProvider.ensure_account(@email)
-      refute Bonfire.Me.Accounts.get_by_email(@email)
+      assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
+      assert Bonfire.Me.Accounts.get_by_email(@email)
     end
 
     test "a staff payload with no status field fails closed" do

@@ -72,7 +72,7 @@ defmodule Bonfire.Ghost.Sync.Members do
   @doc """
   Backfills Ghost *staff* users (owner/admin/editor/author/contributor) into local Bonfire accounts.
 
-  Staff are not members: they never arrive via `member.*` webhooks (Ghost has no staff webhook events at all) and are invisible to `sync_all/1`'s member pages, so without this pass existing staff could only get an account by attempting the gated login. Account-only, like the member backfill — staff pick their own handle via `/create-user` — and via `provision_from_ghost_staff/2`, so tier reconciliation is skipped. Only active staff are fetched: suspended/locked staff must not get login-capable accounts.
+  Staff are not members: they never arrive via `member.*` webhooks (Ghost has no staff webhook events at all) and are invisible to `sync_all/1`'s member pages, so without this pass existing staff could only get an account by attempting the gated login. Account-only, like the member backfill — staff pick their own handle via `/create-user` — and via `provision_from_ghost_staff/2`, so tier reconciliation is skipped. Staff suspended in Ghost (status `inactive`) are excluded; `locked` staff are NOT — that status only means they were imported and never set a Ghost password, which describes almost every bulk-imported contributor.
   """
   @spec sync_all_staff(keyword()) :: {:ok, sync_summary()} | {:error, term()}
   def sync_all_staff(opts \\ []) do
@@ -360,7 +360,8 @@ defmodule Bonfire.Ghost.Sync.Members do
     end
   end
 
-  defp member_email?(email, client) when is_binary(email) and email != "" and not is_nil(client) do
+  defp member_email?(email, client)
+       when is_binary(email) and email != "" and not is_nil(client) do
     case AdminAPI.get_member_by_email(client, email) do
       {:ok, %{"members" => [_ | _]}} -> true
       {:ok, _} -> false
@@ -613,8 +614,8 @@ defmodule Bonfire.Ghost.Sync.Members do
       limit: Keyword.get(opts, :page_size, @page_size),
       page: page,
       order: "created_at asc",
-      # suspended/locked staff must not get accounts, and Ghost returns them unless filtered
-      filter: AdminAPI.active_staff_filter()
+      # staff suspended in Ghost must not get accounts, and Ghost returns them unless filtered
+      filter: AdminAPI.signin_staff_filter()
     )
   end
 

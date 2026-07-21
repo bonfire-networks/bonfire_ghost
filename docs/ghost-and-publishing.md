@@ -52,7 +52,7 @@ profile wins, not whichever profile happens to come first.
 One flow for everyone (`/login/forgot-password`): local account lookup first
 (existing accounts always get their magic link, Ghost is not consulted), then
 Ghost member lookup (with the tier gate), then Ghost staff lookup (staff bypass
-the gate; suspended/locked staff are refused). Unknown emails get the same
+the gate; only staff *suspended* in Ghost are refused). Unknown emails get the same
 neutral response — no account enumeration.
 
 If an *active* staff record has no identity link yet and no account matches
@@ -89,6 +89,23 @@ Testing note: tests that write `required_tier` MUST restore
 `Application.get_env(:bonfire_ghost, :required_tier)` in `on_exit`. Instance
 settings leak between test files through app config, and a leaked gate now
 refuses provisioning across the whole suite.
+
+### Ghost staff statuses (why "locked" is not offboarding)
+
+Per Ghost's own `models/user.js`:
+
+| status | meaning | may sign into Bonfire? |
+|---|---|---|
+| `active`, `warn-1`…`warn-4` | normal; `warn-*` are failed-login warnings | yes |
+| `locked` | "imported users, they get a random password" — never set a Ghost password | **yes** |
+| `inactive` | owner-before-setup, and **suspended** users | no |
+
+Bonfire signs people in with its own magic link and never touches Ghost
+credentials, so "has no Ghost password" says nothing about whether someone may
+have an account here. Treating `locked` as offboarded turned away 1522 of
+jacobin.social's 1535 contributors — every bulk-imported author — who were sent
+the "buy a subscription" email instead of reaching their own author profile.
+Suspension (`inactive`) remains the one Ghost-side control that withholds access.
 
 ### Revocation stance
 

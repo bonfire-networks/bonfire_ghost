@@ -373,13 +373,15 @@ defmodule Bonfire.Ghost.IdentitiesTest do
       account = Accounts.get_by_email(subscriber_email)
 
       {:ok, _} =
-        Users.create(%{profile: %{name: "Maria"}, character: %{username: "mariacollide"}}, account)
+        Users.create(
+          %{profile: %{name: "Maria"}, character: %{username: "mariacollide"}},
+          account
+        )
 
       staffer_email = unique_email("staffer")
 
-      assert Members.claim_split_author(
-               staff(staffer_email, id: "s60", slug: "maria-collide")
-             ) == nil
+      assert Members.claim_split_author(staff(staffer_email, id: "s60", slug: "maria-collide")) ==
+               nil
 
       # the subscriber's account is untouched: same email, not linked to the staff id
       assert Accounts.get_by_email(subscriber_email).id == account.id
