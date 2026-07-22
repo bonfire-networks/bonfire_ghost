@@ -16,11 +16,22 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
   alias Bonfire.Ghost.Sync.Tiers
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) when is_map(args) do
+  def perform(%Oban.Job{args: args} = job) when is_map(args) do
+    Members.put_status(%{
+      state: :running,
+      stage: :tiers,
+      started_at: DateTime.utc_now(),
+      job_id: job.id,
+      attempt: job.attempt,
+      stages: %{}
+    })
+
     with {:ok, tier_summary, tiers} <- sync_tiers(),
+         :ok <- stage_done(:tiers, tier_summary, :members),
          {:ok, member_summary} <- Members.sync_all(tiers: tiers) do
       # reported before the staff pass so a staff failure can't suppress member diagnostics
       warn_member_errors(member_summary)
+      stage_done(:members, member_summary, :staff)
 
       case sync_staff() do
         {:ok, staff_summary} ->
@@ -30,25 +41,50 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
           )
 
           warn_member_errors(staff_summary)
+          Members.record_stage(:staff, staff_summary)
+          Members.update_status(%{state: :done, finished_at: DateTime.utc_now()})
           :ok
 
-        {:error, _} = e ->
+        {:error, reason} = e ->
+          fail_status(reason, job)
           e
 
-        {:cancel, _} = c ->
+        {:cancel, reason} = c ->
+          fail_status(reason, job)
           c
       end
     else
-      {:error, _} = e ->
+      {:error, reason} = e ->
+        fail_status(reason, job)
         e
 
-      {:cancel, _} = c ->
+      {:cancel, reason} = c ->
+        fail_status(reason, job)
         c
 
       other ->
         error(other, "Ghost member backfill returned an unexpected result")
+        fail_status(other, job)
         {:error, {:unexpected_sync_result, other}}
     end
+  end
+
+  # Records what a finished stage did, then names the stage now starting — so a status
+  # stuck on `stage: :members` says plainly that the staff pass never ran.
+  defp stage_done(stage, summary, next_stage) do
+    Members.record_stage(stage, summary)
+    Members.update_status(%{stage: next_stage})
+    :ok
+  end
+
+  defp fail_status(reason, job) do
+    Members.update_status(%{
+      state: :failed,
+      reason: inspect(reason) |> String.slice(0, 500),
+      attempt: job.attempt,
+      max_attempts: job.max_attempts,
+      finished_at: DateTime.utc_now()
+    })
   end
 
   def perform(%Oban.Job{args: args}) do

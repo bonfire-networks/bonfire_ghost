@@ -563,6 +563,42 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               )}
             </p>
 
+            {#if @member_sync_status}
+              <div class={
+                "alert alert-sm mb-4 text-sm",
+                "alert-error": @member_sync_status[:state] == :failed,
+                "alert-success": @member_sync_status[:state] == :done
+              }>
+                <div class="w-full">
+                  <div class="font-medium">
+                    {#case @member_sync_status[:state]}
+                      {#match :done}{l("Last backfill finished")}
+                      {#match :failed}{l("Last backfill FAILED at the %{stage} stage", stage: @member_sync_status[:stage])}
+                      {#match _}{l("Backfill running — %{stage} stage", stage: @member_sync_status[:stage])}
+                    {/case}
+                  </div>
+
+                  <ul class="mt-1 space-y-0.5">
+                    {#for stage <- [:tiers, :members, :staff]}
+                      {#if counts = @member_sync_status[:stages][stage]}
+                        <li>
+                          <b>{stage}</b>: {l("%{n} provisioned", n: counts[:provisioned])}
+                          {#if counts[:skipped] > 0}· {l("%{n} skipped", n: counts[:skipped])}{/if}
+                          {#if counts[:errors_count] > 0}· {l("%{n} errors", n: counts[:errors_count])}{/if}
+                        </li>
+                      {#else}
+                        <li class="opacity-60"><b>{stage}</b>: {l("did not run")}</li>
+                      {/if}
+                    {/for}
+                  </ul>
+
+                  {#if @member_sync_status[:reason]}
+                    <div class="mt-1 font-mono text-xs break-all">{@member_sync_status[:reason]}</div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+
             {#if @members == []}
               <div class="text-center py-8 text-muted">
                 <#Icon iconify="ph:users" class="w-10 h-10 mb-2" />

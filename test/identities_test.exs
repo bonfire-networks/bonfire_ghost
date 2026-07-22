@@ -152,6 +152,67 @@ defmodule Bonfire.Ghost.IdentitiesTest do
     end
   end
 
+  describe "identities that predate the link (the jacobin.social backfill gap)" do
+    test "an UNLINKED account whose Ghost email changed forks a duplicate" do
+      # Reproduces what operators see for accounts created before this feature: the row
+      # is written only when a provisioning path touches someone, so an identity that
+      # was never touched has nothing to match on. Once its Ghost email changes, the ID
+      # lookup misses AND the email lookup misses, so a second account is created.
+      # This is why the backfill has to run BEFORE any email is edited in Ghost.
+      old_email = unique_email("legacy-author")
+      new_email = unique_email("legacy-author-new")
+
+      # an author account as the article importer made it, pre-feature: no identity row
+      account = Fake.fake_account!() |> set_local_email!(old_email)
+
+      {:ok, author} =
+        Users.create(
+          %{profile: %{name: "Legacy"}, character: %{username: "legacyauthor"}},
+          account
+        )
+
+      assert Identities.get_by_staff_id("s70") == nil
+
+      {:ok, forked} =
+        Members.provision_from_ghost_staff(staff(new_email, id: "s70"), create_user: true)
+
+      refute forked.id == author.id, "expected the documented fork"
+      assert Accounts.get_by_email(old_email).id == account.id
+      assert Accounts.get_by_email(new_email).id != account.id
+    end
+
+    test "the backfill run BEFORE the email change prevents the fork" do
+      # the documented remedy: one pass over everyone while emails still match writes the
+      # links, after which the same email change follows the existing account
+      old_email = unique_email("linked-author")
+      new_email = unique_email("linked-author-new")
+
+      account = Fake.fake_account!() |> set_local_email!(old_email)
+
+      {:ok, author} =
+        Users.create(
+          %{profile: %{name: "Linked"}, character: %{username: "linkedauthor"}},
+          account
+        )
+
+      # what the "Sync members" staff pass does while the email still matches
+      assert {:ok, ^account} =
+               (case Members.provision_from_ghost_staff(staff(old_email, id: "s71")) do
+                  {:ok, a} -> {:ok, %{account | email: a.email}}
+                  other -> other
+                end)
+
+      assert Identities.get_by_staff_id("s71").account_id == account.id
+
+      {:ok, resolved} =
+        Members.provision_from_ghost_staff(staff(new_email, id: "s71"), create_user: true)
+
+      assert resolved.id == author.id
+      assert Accounts.get_by_email(new_email).id == account.id
+      refute Accounts.get_by_email(old_email)
+    end
+  end
+
   describe "email changes follow the person, in both directions" do
     test "member email changed in Ghost (webhook/backfill payload): same account, email follows" do
       e1 = unique_email("m-before")

@@ -102,6 +102,13 @@ defmodule Bonfire.Ghost.LiveHandler do
       true ->
         case MemberSyncWorker.new(%{}) |> Oban.insert() do
           {:ok, _job} ->
+            Bonfire.Ghost.Sync.Members.put_status(%{
+              state: :queued,
+              stage: :tiers,
+              stages: %{},
+              started_at: DateTime.utc_now()
+            })
+
             {:noreply,
              assign_flash(
                socket,

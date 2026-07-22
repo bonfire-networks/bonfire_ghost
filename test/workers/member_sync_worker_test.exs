@@ -114,4 +114,75 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorkerTest do
 
     assert :ok = MemberSyncWorker.perform(%Oban.Job{args: %{}})
   end
+
+  describe "status reporting (so a backfill is not a black box)" do
+    setup do
+      Members.clear_status()
+      on_exit(&Members.clear_status/0)
+      :ok
+    end
+
+    defp stub_tiers(
+           result \\ {:ok, %{created: 0, updated: 0, unchanged: 0, archived: 0, errors: []}, []}
+         ) do
+      Repatch.patch(Tiers, :sync_all, fn _opts -> result end)
+    end
+
+    test "a completed run records what EACH stage did, including staff" do
+      stub_tiers()
+
+      Repatch.patch(Members, :sync_all, fn _opts ->
+        {:ok, %{provisioned: 7, skipped: 2, errors: []}}
+      end)
+
+      Repatch.patch(Members, :sync_all_staff, fn _opts ->
+        {:ok, %{provisioned: 1522, skipped: 0, errors: []}}
+      end)
+
+      assert :ok = MemberSyncWorker.perform(%Oban.Job{args: %{}, id: 42, attempt: 1})
+
+      status = Members.status()
+      assert status.state == :done
+      assert status.stages[:members].provisioned == 7
+      # the number an operator needs to see: did the staff pass actually run?
+      assert status.stages[:staff].provisioned == 1522
+    end
+
+    test "a run that dies before the staff pass says so — status stops at :members" do
+      # the jacobin.social failure mode: the member pass short-circuits the staff pass,
+      # and with no status the settings page looked identical to a successful run
+      stub_tiers()
+      Repatch.patch(Members, :sync_all, fn _opts -> {:error, :unauthorized} end)
+
+      Repatch.patch(Members, :sync_all_staff, fn _opts ->
+        flunk("staff must not run when the member pass failed")
+      end)
+
+      assert {:error, :unauthorized} =
+               MemberSyncWorker.perform(%Oban.Job{args: %{}, id: 43, attempt: 1, max_attempts: 3})
+
+      status = Members.status()
+      assert status.state == :failed
+      assert status.stage == :members
+      assert status.reason =~ "unauthorized"
+      refute Map.has_key?(status.stages, :staff)
+    end
+
+    test "staff errors are surfaced with the affected identities" do
+      stub_tiers()
+
+      Repatch.patch(Members, :sync_all, fn _opts ->
+        {:ok, %{provisioned: 0, skipped: 0, errors: []}}
+      end)
+
+      Repatch.patch(Members, :sync_all_staff, fn _opts ->
+        {:ok, %{provisioned: 3, skipped: 0, errors: [{"who@test.local", :missing_email}]}}
+      end)
+
+      assert :ok = MemberSyncWorker.perform(%Oban.Job{args: %{}, id: 44, attempt: 1})
+
+      assert %{errors_count: 1, errors: [%{who: "who@test.local"}]} =
+               Members.status().stages[:staff]
+    end
+  end
 end

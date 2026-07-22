@@ -30,6 +30,7 @@ defmodule Bonfire.Ghost.Sync.Members do
 
   alias Bonfire.Boundaries.Circles
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
+  alias Bonfire.Common.Cache
   alias Bonfire.Common.Text
   alias Bonfire.Me.Accounts
   alias Bonfire.Me.Characters
@@ -53,6 +54,72 @@ defmodule Bonfire.Ghost.Sync.Members do
         }
 
   @empty_summary %{provisioned: 0, skipped: 0, errors: []}
+
+  @status_cache_key "ghost_member_sync_status"
+  # long enough that an admin returning the next day still sees the last outcome
+  @status_ttl 1_000 * 60 * 60 * 24 * 7
+  @max_stored_errors 20
+
+  @doc """
+  Status of the last member/staff backfill, for the settings UI, or nil if none ran recently.
+
+  A map with `:state` (`:queued` | `:running` | `:done` | `:failed`), the `:stage` currently running (`:tiers` | `:members` | `:staff`), per-stage counters, a capped `:errors` list, and timestamps — including `:updated_at`, which acts as a heartbeat so a job that died mid-run can be told apart from one still working.
+
+  Without this, the backfill was entirely unobservable: the settings page said "started" and nothing else, so a staff pass that never ran (the member pass short-circuits it on failure) looked identical to one that worked.
+  """
+  def status, do: Cache.get!(@status_cache_key)
+
+  @doc "Overwrites the backfill status, stamping the `:updated_at` heartbeat."
+  def put_status(map) when is_map(map) do
+    map = Map.put(map, :updated_at, DateTime.utc_now())
+    # `async: false` — read-modify-write, must land in order (see Cache.put docs)
+    Cache.put(@status_cache_key, map, expire: @status_ttl, async: false)
+    map
+  end
+
+  @doc "Merges keys into the stored status (no-op if nothing is stored)."
+  def update_status(attrs) when is_map(attrs) do
+    case status() do
+      %{} = current -> put_status(Map.merge(current, attrs))
+      _ -> put_status(attrs)
+    end
+  end
+
+  @doc "Forgets the stored backfill status (mainly for tests)."
+  def clear_status, do: Cache.remove(@status_cache_key)
+
+  @doc """
+  Records the outcome of one backfill stage (`:tiers`, `:members` or `:staff`).
+
+  Counters are stored per stage so an operator can see at a glance whether the staff pass ran at all — the question that made a failed jacobin.social backfill impossible to diagnose.
+  """
+  def record_stage(stage, summary) when is_map(summary) do
+    update_status(%{
+      stage: stage,
+      stage_at: DateTime.utc_now(),
+      stages:
+        Map.put(stage_counts(), stage, %{
+          provisioned: Map.get(summary, :provisioned, 0),
+          skipped: Map.get(summary, :skipped, 0),
+          errors_count: length(Map.get(summary, :errors, [])),
+          errors: stored_errors(Map.get(summary, :errors, []))
+        })
+    })
+  end
+
+  defp stage_counts, do: e(status(), :stages, %{})
+
+  defp stored_errors(errors) do
+    errors
+    |> Enum.take(@max_stored_errors)
+    |> Enum.map(fn
+      {who, reason} ->
+        %{who: to_string(who || "?"), reason: inspect(reason) |> String.slice(0, 300)}
+
+      other ->
+        %{who: "?", reason: inspect(other) |> String.slice(0, 300)}
+    end)
+  end
 
   @doc """
   Backfills all Ghost members into local Bonfire accounts/users and synced `ghost_tier:*` circles.

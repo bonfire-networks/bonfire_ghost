@@ -37,6 +37,7 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   data topic_matching_group, :any, default: :__unset__
   # Live status of the background article backfill — see Bonfire.Ghost.Sync.Articles.status/0.
   data article_sync_status, :any, default: nil
+  data member_sync_status, :any, default: nil
   data sync_polling, :boolean, default: false
   # Fail-closed: only flipped true once the viewer is confirmed to be an instance admin.
   data authorized, :boolean, default: false
@@ -49,7 +50,11 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
       {:ok, socket}
     else
       status = Bonfire.Ghost.Sync.Articles.status()
-      socket = assign(socket, :article_sync_status, status)
+
+      socket =
+        socket
+        |> assign(:article_sync_status, status)
+        |> assign(:member_sync_status, Bonfire.Ghost.Sync.Members.status())
 
       if sync_in_flight?(status) do
         schedule_sync_status_poll(socket)
@@ -95,7 +100,9 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
          gated_login: gated_login?(),
          # Normalized boolean (the stored value can be the string "true"), so the toggle's
          # `checked` comparison and the webhook block agree. Reuses the canonical predicate.
-         auto_import: Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?()
+         auto_import: Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?(),
+         # what the last member/staff backfill actually did, per stage
+         member_sync_status: Bonfire.Ghost.Sync.Members.status()
        )
        |> assign_show_topic_matching()
        |> maybe_resume_sync_polling()}
