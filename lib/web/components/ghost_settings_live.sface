@@ -653,6 +653,93 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
             {/if}
           </div>
         </section>
+
+        {!-- Staff / contributors: a SEPARATE Ghost entity from members (authors, editors,
+             admins). Provisioned by the same "Sync members" job (staff pass), shown apart
+             so the ~dozens of members aren't confused with the hundreds of contributors. --}
+        <section x-data="{expanded: false}" class="rounded-box border border-secondary bg-base-100">
+          <div class="flex items-center justify-between gap-3 p-4">
+            <h3 class="min-w-0">
+              <button
+                id="ghost-staff-toggle"
+                type="button"
+                x-on:click="expanded = !expanded"
+                class="flex items-center gap-2 font-semibold text-base"
+              >
+                <#Icon iconify="ph:pen-nib" class="w-5 h-5 text-muted" />
+                {l("Staff & contributors")}
+                {#if @staff_page_info}
+                  <span class="badge badge-sm badge-ghost">{@staff_page_info.total}</span>
+                {/if}
+                <span class="transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
+                  <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+                </span>
+              </button>
+            </h3>
+          </div>
+
+          <div x-show="expanded" x-collapse x-cloak class="px-4 pb-4">
+            <p class="text-sm text-muted mb-4">
+              {l(
+                "Ghost staff (authors, editors, admins) are separate from members. They're provisioned by the same \"Sync members\" backfill above — no tiers, no subscription needed — and can sign in with their Ghost email. Suspended staff are excluded."
+              )}
+            </p>
+
+            {#if @staff == []}
+              <div class="text-center py-8 text-muted">
+                <#Icon iconify="ph:pen-nib" class="w-10 h-10 mb-2" />
+                <p>{l("No staff loaded. Sync to pull them from Ghost.")}</p>
+              </div>
+            {#else}
+              <div class="overflow-x-auto">
+                <table class="table table-zebra w-full">
+                  <thead>
+                    <tr>
+                      <th>{l("Email")}</th>
+                      <th>{l("Name")}</th>
+                      <th>{l("Role")}</th>
+                      <th>{l("Status")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#for person <- @staff}
+                      <tr>
+                        <td><span class="font-mono text-sm">{person["email"]}</span></td>
+                        <td>{person["name"] || "-"}</td>
+                        <td>{staff_role(person)}</td>
+                        <td>
+                          <span class={"badge badge-sm #{status_badge_class(person["status"])}"}>{person["status"]}</span>
+                        </td>
+                      </tr>
+                    {/for}
+                  </tbody>
+                </table>
+              </div>
+
+              {#if @staff_page_info}
+                <p class="text-sm text-muted mt-3 text-center">
+                  {l("Showing %{shown} of %{total}. The backfill syncs all of them.",
+                    shown: length(@staff),
+                    total: @staff_page_info.total
+                  )}
+                </p>
+              {/if}
+
+              {#if @staff_page_info && @staff_page_info.has_next}
+                <div class="flex justify-center mt-4">
+                  <button
+                    id="ghost-staff-load-more"
+                    class="btn btn-ds-outline btn-sm"
+                    phx-click="Bonfire.Ghost:load_more_staff"
+                    phx-target={@myself}
+                  >
+                    {l("Load more")}
+                  </button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+        </section>
       {#else}
         <div class="rounded-box border border-secondary bg-base-100 p-4 flex items-start gap-3">
           <#Icon iconify="ph:info" class="w-5 h-5 text-muted shrink-0" />

@@ -68,4 +68,54 @@ defmodule Bonfire.Ghost.LiveHandlerTest do
       refute_enqueued(worker: ArticleSyncWorker)
     end
   end
+
+  describe "load_more_staff" do
+    alias Bonfire.Ghost.AdminAPI
+
+    test "appends the next page of staff and advances the pagination" do
+      Repatch.patch(LiveHandler, :can_configure_instance?, fn _socket -> true end)
+      Repatch.patch(Bonfire.Ghost, :admin_client, fn -> {:ok, :client} end)
+
+      Repatch.patch(AdminAPI, :list_users, fn :client, opts ->
+        assert Keyword.get(opts, :page) == 2
+        # the preview must use the same filter the backfill does
+        assert Keyword.get(opts, :filter) == AdminAPI.signin_staff_filter()
+
+        {:ok,
+         %{
+           "users" => [%{"email" => "page2@test.local", "status" => "locked"}],
+           "meta" => %{"pagination" => %{"page" => 2, "pages" => 3, "next" => 3, "total" => 120}}
+         }}
+      end)
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          flash: %{},
+          __changed__: %{},
+          staff: [%{"email" => "page1@test.local"}],
+          staff_page_info: %{page: 1}
+        }
+      }
+
+      assert {:noreply, socket} = LiveHandler.handle_event("load_more_staff", %{}, socket)
+
+      assert Enum.map(socket.assigns.staff, & &1["email"]) == [
+               "page1@test.local",
+               "page2@test.local"
+             ]
+
+      assert socket.assigns.staff_page_info.page == 2
+      assert socket.assigns.staff_page_info.has_next
+    end
+
+    test "does nothing without instance permission" do
+      Repatch.patch(LiveHandler, :can_configure_instance?, fn _socket -> false end)
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{flash: %{}, __changed__: %{}, staff: [], staff_page_info: %{page: 1}}
+      }
+
+      assert {:noreply, _socket} = LiveHandler.handle_event("load_more_staff", %{}, socket)
+    end
+  end
 end

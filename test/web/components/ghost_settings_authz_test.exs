@@ -43,6 +43,10 @@ defmodule Bonfire.Ghost.Web.GhostSettingsAuthzTest do
       {:ok, %{"members" => [], "meta" => %{}}}
     end)
 
+    Repatch.patch(AdminAPI, :list_users, @global, fn :client, _opts ->
+      {:ok, %{"users" => [], "meta" => %{}}}
+    end)
+
     :ok
   end
 

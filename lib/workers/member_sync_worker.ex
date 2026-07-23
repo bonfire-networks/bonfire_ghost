@@ -17,21 +17,27 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) when is_map(args) do
-    Members.put_status(%{
+    # The accumulated status is threaded through this function rather than rebuilt by
+    # re-reading the cache in each stage: the staff pass runs for minutes, and a
+    # read-merge-write against the shared cache across that window can lose the earlier
+    # stages (which is exactly how a completed run reported "tiers/members did not run").
+    status = %{
       state: :running,
       stage: :tiers,
       started_at: DateTime.utc_now(),
       job_id: job.id,
       attempt: job.attempt,
       stages: %{}
-    })
+    }
+
+    Members.put_status(status)
 
     with {:ok, tier_summary, tiers} <- sync_tiers(),
-         :ok <- stage_done(:tiers, tier_summary, :members),
+         status = stage_done(status, :tiers, tier_summary, :members),
          {:ok, member_summary} <- Members.sync_all(tiers: tiers) do
       # reported before the staff pass so a staff failure can't suppress member diagnostics
       warn_member_errors(member_summary)
-      stage_done(:members, member_summary, :staff)
+      status = stage_done(status, :members, member_summary, :staff)
 
       case sync_staff() do
         {:ok, staff_summary} ->
@@ -41,8 +47,12 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
           )
 
           warn_member_errors(staff_summary)
-          Members.record_stage(:staff, staff_summary)
-          Members.update_status(%{state: :done, finished_at: DateTime.utc_now()})
+
+          status
+          |> record_stage(:staff, staff_summary)
+          |> Map.merge(%{state: :done, finished_at: DateTime.utc_now()})
+          |> Members.put_status()
+
           :ok
 
         {:error, reason} = e ->
@@ -69,22 +79,37 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
     end
   end
 
-  # Records what a finished stage did, then names the stage now starting — so a status
-  # stuck on `stage: :members` says plainly that the staff pass never ran.
-  defp stage_done(stage, summary, next_stage) do
-    Members.record_stage(stage, summary)
-    Members.update_status(%{stage: next_stage})
-    :ok
+  # Records what a finished stage did and names the stage now starting, returning the
+  # updated status (also persisted) — so a status stuck on `stage: :members` says plainly
+  # that the staff pass never ran.
+  defp stage_done(status, stage, summary, next_stage) do
+    status
+    |> record_stage(stage, summary)
+    |> Map.put(:stage, next_stage)
+    |> Members.put_status()
   end
 
+  # Adds one stage's counters to the accumulated status map (pure — no cache read).
+  defp record_stage(status, stage, summary) do
+    Map.update(status, :stages, %{stage => Members.stage_counts(summary)}, fn stages ->
+      Map.put(stages, stage, Members.stage_counts(summary))
+    end)
+  end
+
+  # Reads the last PERSISTED status (which `stage_done` kept current) rather than the
+  # in-`with` accumulator: a `with/else` clause can't see variables rebound in the chain,
+  # so the accumulator here would be stale on the exact stage that just failed. A single
+  # read on the failure path carries no race (failures are one-shot, not the long loop).
   defp fail_status(reason, job) do
-    Members.update_status(%{
+    (Members.status() || %{stages: %{}})
+    |> Map.merge(%{
       state: :failed,
       reason: inspect(reason) |> String.slice(0, 500),
       attempt: job.attempt,
       max_attempts: job.max_attempts,
       finished_at: DateTime.utc_now()
     })
+    |> Members.put_status()
   end
 
   def perform(%Oban.Job{args: args}) do

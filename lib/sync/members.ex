@@ -77,37 +77,22 @@ defmodule Bonfire.Ghost.Sync.Members do
     map
   end
 
-  @doc "Merges keys into the stored status (no-op if nothing is stored)."
-  def update_status(attrs) when is_map(attrs) do
-    case status() do
-      %{} = current -> put_status(Map.merge(current, attrs))
-      _ -> put_status(attrs)
-    end
-  end
-
   @doc "Forgets the stored backfill status (mainly for tests)."
   def clear_status, do: Cache.remove(@status_cache_key)
 
   @doc """
-  Records the outcome of one backfill stage (`:tiers`, `:members` or `:staff`).
+  The displayable counters for one stage's summary (`:tiers`, `:members` or `:staff`).
 
-  Counters are stored per stage so an operator can see at a glance whether the staff pass ran at all — the question that made a failed jacobin.social backfill impossible to diagnose.
+  Pure — the caller accumulates these into the status map and persists once, rather than each stage re-reading the shared cache to append itself (which, across the minutes-long staff pass, could lose the earlier stages and report them as "did not run").
   """
-  def record_stage(stage, summary) when is_map(summary) do
-    update_status(%{
-      stage: stage,
-      stage_at: DateTime.utc_now(),
-      stages:
-        Map.put(stage_counts(), stage, %{
-          provisioned: Map.get(summary, :provisioned, 0),
-          skipped: Map.get(summary, :skipped, 0),
-          errors_count: length(Map.get(summary, :errors, [])),
-          errors: stored_errors(Map.get(summary, :errors, []))
-        })
-    })
+  def stage_counts(summary) when is_map(summary) do
+    %{
+      provisioned: Map.get(summary, :provisioned, 0),
+      skipped: Map.get(summary, :skipped, 0),
+      errors_count: length(Map.get(summary, :errors, [])),
+      errors: stored_errors(Map.get(summary, :errors, []))
+    }
   end
-
-  defp stage_counts, do: e(status(), :stages, %{})
 
   defp stored_errors(errors) do
     errors

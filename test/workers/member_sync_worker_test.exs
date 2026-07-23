@@ -128,7 +128,7 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorkerTest do
       Repatch.patch(Tiers, :sync_all, fn _opts -> result end)
     end
 
-    test "a completed run records what EACH stage did, including staff" do
+    test "a completed run records ALL THREE stages, even if the cache goes stale mid-run" do
       stub_tiers()
 
       Repatch.patch(Members, :sync_all, fn _opts ->
@@ -136,6 +136,10 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorkerTest do
       end)
 
       Repatch.patch(Members, :sync_all_staff, fn _opts ->
+        # simulate the real hazard: the shared status cache is clobbered while the long
+        # staff pass runs. The final status must still carry tiers + members, because the
+        # worker accumulates in-process rather than re-reading the cache to append.
+        Members.put_status(%{state: :running, stages: %{}})
         {:ok, %{provisioned: 1522, skipped: 0, errors: []}}
       end)
 
@@ -143,6 +147,7 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorkerTest do
 
       status = Members.status()
       assert status.state == :done
+      assert status.stages[:tiers].provisioned == 0
       assert status.stages[:members].provisioned == 7
       # the number an operator needs to see: did the staff pass actually run?
       assert status.stages[:staff].provisioned == 1522

@@ -24,8 +24,10 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   prop scope, :any, default: nil
   data settings, :any, default: nil
   data members, :list, default: []
+  data staff, :list, default: []
   data tiers, :list, default: []
   data page_info, :any, default: nil
+  data staff_page_info, :any, default: nil
   data loading, :boolean, default: true
   data syncing, :boolean, default: false
   data last_sync, :any, default: nil
@@ -49,14 +51,16 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
     if socket.assigns[:authorized] != true do
       {:ok, socket}
     else
-      status = Bonfire.Ghost.Sync.Articles.status()
+      article_status = Bonfire.Ghost.Sync.Articles.status()
+      member_status = Bonfire.Ghost.Sync.Members.status()
 
       socket =
         socket
-        |> assign(:article_sync_status, status)
-        |> assign(:member_sync_status, Bonfire.Ghost.Sync.Members.status())
+        |> assign(:article_sync_status, article_status)
+        |> assign(:member_sync_status, member_status)
 
-      if sync_in_flight?(status) do
+      # keep polling while EITHER backfill is in flight (they share the one 2s loop)
+      if sync_in_flight?(article_status) or sync_in_flight?(member_status) do
         schedule_sync_status_poll(socket)
         {:ok, assign(socket, :sync_polling, true)}
       else
@@ -112,7 +116,8 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   # If a backfill was already queued/running when the page (re)loaded, resume the status
   # poll loop — `sync_polling` dedupes so unrelated update/2 calls don't stack timers.
   defp maybe_resume_sync_polling(socket) do
-    if sync_in_flight?(socket.assigns[:article_sync_status]) and
+    if (sync_in_flight?(socket.assigns[:article_sync_status]) or
+          sync_in_flight?(socket.assigns[:member_sync_status])) and
          socket.assigns[:sync_polling] != true do
       schedule_sync_status_poll(socket)
       assign(socket, :sync_polling, true)
@@ -269,9 +274,16 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
     case status do
       "paid" -> "badge-success"
       "comped" -> "badge-info"
+      "active" -> "badge-success"
+      "locked" -> "badge-ghost"
+      "inactive" -> "badge-warning"
       _ -> "badge-ghost"
     end
   end
+
+  @doc "The staff member's Ghost role name (Contributor, Author, Editor, …), or a dash."
+  def staff_role(%{"roles" => [%{"name" => name} | _]}) when is_binary(name), do: name
+  def staff_role(_person), do: "-"
 
   @doc "Returns true when the legacy primary-tag-to-topic matcher applies to the configured destination."
   def show_topic_matching_toggle? do

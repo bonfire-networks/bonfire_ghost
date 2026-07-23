@@ -50,6 +50,32 @@ defmodule Bonfire.Ghost.LiveHandler do
     end
   end
 
+  def handle_event("load_more_staff", _params, socket) do
+    if not can_configure_instance?(socket) do
+      {:noreply, assign_flash(socket, :error, unauthorized_message())}
+    else
+      current_page = get_in(socket.assigns, [:staff_page_info, :page]) || 1
+      next_page = current_page + 1
+
+      with {:ok, c} <- Ghost.admin_client(),
+           {:ok, %{"users" => new_staff, "meta" => meta}} <-
+             AdminAPI.list_users(c,
+               limit: 50,
+               page: next_page,
+               include: "roles",
+               filter: AdminAPI.signin_staff_filter()
+             ) do
+        {:noreply,
+         assign(socket,
+           staff: socket.assigns.staff ++ new_staff,
+           staff_page_info: extract_page_info(meta)
+         )}
+      else
+        _ -> {:noreply, socket}
+      end
+    end
+  end
+
   def handle_event("sync_tiers", _params, socket) do
     if not can_configure_instance?(socket) do
       {:noreply, assign_flash(socket, :error, unauthorized_message())}
@@ -102,19 +128,22 @@ defmodule Bonfire.Ghost.LiveHandler do
       true ->
         case MemberSyncWorker.new(%{}) |> Oban.insert() do
           {:ok, _job} ->
-            Bonfire.Ghost.Sync.Members.put_status(%{
-              state: :queued,
-              stage: :tiers,
-              stages: %{},
-              started_at: DateTime.utc_now()
-            })
+            status =
+              Bonfire.Ghost.Sync.Members.put_status(%{
+                state: :queued,
+                stage: :tiers,
+                stages: %{},
+                started_at: DateTime.utc_now()
+              })
 
             {:noreply,
-             assign_flash(
-               socket,
+             socket
+             |> assign(:member_sync_status, status)
+             |> start_sync_status_polling()
+             |> assign_flash(
                :info,
                l(
-                 "Ghost member backfill started. Tiers will sync first, then existing members will be added to their circles."
+                 "Ghost member & staff backfill started. Progress is shown below; tiers sync first, then members, then staff."
                )
              )}
 
@@ -221,6 +250,17 @@ defmodule Bonfire.Ghost.LiveHandler do
        fn ->
          with {:ok, c} <- admin_client,
               do: AdminAPI.list_members(c, limit: 50, include: @members_include)
+       end},
+      {:staff,
+       fn ->
+         with {:ok, c} <- admin_client,
+              # same filter the staff backfill uses, so the preview matches what would sync
+              do:
+                AdminAPI.list_users(c,
+                  limit: 50,
+                  include: "roles",
+                  filter: AdminAPI.signin_staff_filter()
+                )
        end}
     ]
 
@@ -238,6 +278,7 @@ defmodule Bonfire.Ghost.LiveHandler do
       |> apply_settings(results.settings)
       |> apply_tiers(results.tiers)
       |> apply_members(results.members)
+      |> apply_staff(results.staff)
 
     # Count imported articles by their canonical URL prefix — use the blog's public
     # site URL (what article URLs actually use), falling back to the configured GHOST_URL.
@@ -267,6 +308,15 @@ defmodule Bonfire.Ghost.LiveHandler do
     do: assign(socket, members: members, page_info: extract_page_info(meta))
 
   defp apply_members(socket, {:error, reason}), do: assign(socket, members: [], error: reason)
+
+  defp apply_staff(socket, nil), do: assign(socket, staff: [])
+
+  defp apply_staff(socket, {:ok, %{"users" => staff, "meta" => meta}}),
+    do: assign(socket, staff: staff, staff_page_info: extract_page_info(meta))
+
+  defp apply_staff(socket, {:ok, %{"users" => staff}}), do: assign(socket, staff: staff)
+  # a staff-fetch error is non-fatal to the rest of the page (don't clobber :error)
+  defp apply_staff(socket, {:error, _reason}), do: assign(socket, staff: [])
 
   defp extract_page_info(%{"pagination" => pagination}) do
     %{
