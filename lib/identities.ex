@@ -23,6 +23,7 @@ defmodule Bonfire.Ghost.Identities do
 
   import Untangle
   import Ecto.Query
+  use Bonfire.Common.E
 
   alias Bonfire.Common.Types
   alias Bonfire.Ghost
@@ -123,6 +124,43 @@ defmodule Bonfire.Ghost.Identities do
 
       _ ->
         nil
+    end
+  end
+
+  @doc """
+  Maps each given Ghost id to the `@username` of its linked Bonfire profile, for the
+  subset that have created one. `kind` is `:member` or `:staff` (they occupy separate
+  columns). Ids with only an account (no profile yet) are simply absent from the result.
+
+  Batched — one identity query plus one user query regardless of list length — so the
+  settings page can annotate a whole page of members without an N+1.
+  """
+  def usernames_by_ghost_id(ghost_ids, kind)
+      when is_list(ghost_ids) and kind in [:member, :staff] do
+    ids = Enum.filter(ghost_ids, &(is_binary(&1) and &1 != ""))
+
+    if ids == [] do
+      %{}
+    else
+      column = if kind == :staff, do: :ghost_staff_id, else: :ghost_member_id
+
+      rows =
+        Ghost.repo().all(
+          from(gi in GhostIdentity,
+            where: field(gi, ^column) in ^ids and not is_nil(gi.user_id),
+            select: {field(gi, ^column), gi.user_id}
+          )
+        )
+
+      username_by_user =
+        rows
+        |> Enum.map(&elem(&1, 1))
+        |> Users.by_ids(:minimal)
+        |> Map.new(fn user -> {user.id, e(user, :character, :username, nil)} end)
+
+      rows
+      |> Map.new(fn {ghost_id, user_id} -> {ghost_id, username_by_user[user_id]} end)
+      |> Map.reject(fn {_ghost_id, username} -> is_nil(username) end)
     end
   end
 end

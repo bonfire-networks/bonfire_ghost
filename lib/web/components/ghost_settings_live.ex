@@ -24,6 +24,7 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   prop scope, :any, default: nil
   data settings, :any, default: nil
   data members, :list, default: []
+  data member_usernames, :map, default: %{}
   data staff, :list, default: []
   data tiers, :list, default: []
   data page_info, :any, default: nil

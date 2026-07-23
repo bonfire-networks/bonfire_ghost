@@ -108,6 +108,25 @@ defmodule Bonfire.Ghost.IdentitiesTest do
       assert Identities.staff_user("nope") == nil
       assert Identities.get_by_account(account).ghost_staff_id == "s4"
     end
+
+    test "usernames_by_ghost_id/2 maps ids with a linked profile to their @username" do
+      # one member with a profile, one member with only an account, one unknown id
+      with_profile = Fake.fake_account!()
+      user = Fake.fake_user!(with_profile)
+      username = user.character.username
+      assert {:ok, _} = Identities.link(with_profile, member_id: "m_has", user: user)
+
+      account_only = Fake.fake_account!()
+      assert {:ok, _} = Identities.link(account_only, member_id: "m_bare")
+
+      result = Identities.usernames_by_ghost_id(["m_has", "m_bare", "m_unknown"], :member)
+
+      assert result == %{"m_has" => username}
+
+      # the SAME id under the staff column is a different namespace → not found
+      assert Identities.usernames_by_ghost_id(["m_has"], :staff) == %{}
+      assert Identities.usernames_by_ghost_id([], :member) == %{}
+    end
   end
 
   describe "provisioning writes the link" do

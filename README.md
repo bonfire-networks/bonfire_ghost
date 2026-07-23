@@ -4,11 +4,18 @@ Ghost blog integration for Bonfire. This extension connects your Bonfire instanc
 
 ## Features
 
-- Display Ghost blog posts in your Bonfire instance
-- Embed a Bonfire comment thread on Ghost articles (`data-canonical-slug` / `data-canonical-id`)
-- Auto-provision Ghost authors and members as Bonfire users on first login
-- Sync Ghost membership tiers to Bonfire circles
-- Configurable via environment variables
+- Display Ghost blog posts in your Bonfire instance.
+- Backfill existing articles and automatically mirror publish, edit, unpublish, delete, and republish events.
+- Filter article imports by Ghost tags and route them into a Bonfire group or topic.
+- Embed a federated Bonfire discussion on Ghost articles (`data-canonical-slug` / `data-canonical-id`).
+- Provision passwordless Bonfire accounts for eligible Ghost members and staff.
+- Link Ghost authors to stable Bonfire profiles for article attribution.
+- Sync Ghost membership tiers to Bonfire circles and use them to protect paid articles.
+- Gate new account creation by selected Ghost membership tiers.
+- Configure and monitor the integration from an administrator-only settings screen.
+- Configure credentials through environment variables and feature behavior through instance settings.
+
+For the complete product-facing capability guide, including access semantics and deliberate limitations, see [Ghost + Bonfire features](docs/features.md).
 
 ## Configuration
 
@@ -57,7 +64,7 @@ instance, in **Ghost settings**:
 
 | Setting | Replaces the old attribute | What it does |
 |---|---|---|
-| Import author (`auto_import_as`) | `data-creator` | Who imported articles are attributed to. **Required** — without it, no thread is created. |
+| Import author (`auto_import_as`) | `data-creator` | Fallback identity used when the Ghost article author cannot be resolved. Without either a resolvable Ghost author or this fallback, no thread is created. |
 | Post into group (`post_into_group`) | `data-group-id` | The group/topic imported articles are posted into. |
 | Require topic (`require_topic`) | `data-require-topic` | Only import when the article's primary tag matches a Bonfire topic. |
 | — (derived from Ghost `visibility`) | `data-boundary` | Public/members/paid articles get their audience from Ghost itself; paid articles are `:see`-only with `:read` gated to the `ghost_tier:*` circles. |

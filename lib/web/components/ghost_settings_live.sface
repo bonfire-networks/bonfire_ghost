@@ -609,8 +609,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 <table class="table table-zebra w-full">
                   <thead>
                     <tr>
-                      <th>{l("Email")}</th>
                       <th>{l("Name")}</th>
+                      <th>{l("Email")}</th>
+                      <th>{l("Bonfire profile")}</th>
                       <th>{l("Status")}</th>
                       <th>{l("Subscribed")}</th>
                       <th>{l("Joined")}</th>
@@ -619,8 +620,15 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   <tbody>
                     {#for member <- @members}
                       <tr>
-                        <td><span class="font-mono text-sm">{member["email"]}</span></td>
                         <td>{member["name"] || "-"}</td>
+                        <td><span class="font-mono text-sm">{member["email"]}</span></td>
+                        <td>
+                          {#if username = @member_usernames[member["id"]]}
+                            <a href={"/@" <> username} class="link link-primary text-sm">@{username}</a>
+                          {#else}
+                            <span class="text-muted text-sm">{l("not set up")}</span>
+                          {/if}
+                        </td>
                         <td>
                           <span class={"badge badge-sm #{status_badge_class(member["status"])}"}>{member["status"]}</span>
                         </td>

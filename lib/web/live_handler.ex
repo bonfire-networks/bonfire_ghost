@@ -43,7 +43,11 @@ defmodule Bonfire.Ghost.LiveHandler do
              AdminAPI.list_members(c, limit: 50, page: next_page, include: @members_include) do
         page_info = extract_page_info(meta)
         members = socket.assigns.members ++ new_members
-        {:noreply, assign(socket, members: members, page_info: page_info)}
+
+        {:noreply,
+         socket
+         |> assign(members: members, page_info: page_info)
+         |> assign_member_usernames()}
       else
         _ -> {:noreply, socket}
       end
@@ -278,6 +282,7 @@ defmodule Bonfire.Ghost.LiveHandler do
       |> apply_settings(results.settings)
       |> apply_tiers(results.tiers)
       |> apply_members(results.members)
+      |> assign_member_usernames()
       |> apply_staff(results.staff)
 
     # Count imported articles by their canonical URL prefix — use the blog's public
@@ -308,6 +313,18 @@ defmodule Bonfire.Ghost.LiveHandler do
     do: assign(socket, members: members, page_info: extract_page_info(meta))
 
   defp apply_members(socket, {:error, reason}), do: assign(socket, members: [], error: reason)
+
+  # Annotate the current members with the @username of any linked Bonfire profile, so the
+  # table can show who has connected/created their identity vs who only has an account.
+  defp assign_member_usernames(socket) do
+    ghost_ids = Enum.map(socket.assigns[:members] || [], & &1["id"])
+
+    assign(
+      socket,
+      :member_usernames,
+      Bonfire.Ghost.Identities.usernames_by_ghost_id(ghost_ids, :member)
+    )
+  end
 
   defp apply_staff(socket, nil), do: assign(socket, staff: [])
 
