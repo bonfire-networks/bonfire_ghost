@@ -88,39 +88,6 @@ defmodule Bonfire.Ghost.LiveHandler do
     end
   end
 
-  defp do_sync_tiers(socket) do
-    opts = [
-      current_user: current_user(socket),
-      current_account: current_account(socket)
-    ]
-
-    case Sync.Tiers.sync_all(opts) do
-      {:ok, summary, tiers} ->
-        {flash_type, message} = sync_flash(summary)
-
-        {:noreply,
-         socket
-         |> assign(
-           syncing: false,
-           tiers: tiers,
-           last_sync: %{at: DateTime.utc_now(), summary: summary}
-         )
-         |> assign_flash(flash_type, message)}
-
-      {:error, :not_configured} ->
-        {:noreply,
-         socket
-         |> assign(:syncing, false)
-         |> assign_flash(:error, l("Ghost Admin API is not configured"))}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(:syncing, false)
-         |> assign_flash(:error, l("Ghost tier sync failed: %{reason}", reason: inspect(reason)))}
-    end
-  end
-
   def handle_event("sync_members", _params, socket) do
     cond do
       not can_configure_instance?(socket) ->
@@ -131,14 +98,15 @@ defmodule Bonfire.Ghost.LiveHandler do
 
       true ->
         case MemberSyncWorker.new(%{}) |> Oban.insert() do
-          {:ok, _job} ->
-            status =
-              Bonfire.Ghost.Sync.Members.put_status(%{
-                state: :queued,
-                stage: :tiers,
-                stages: %{},
-                started_at: DateTime.utc_now()
-              })
+          {:ok, %Oban.Job{conflict?: true}} ->
+            {:noreply,
+             socket
+             |> assign(:member_sync_status, Bonfire.Ghost.Sync.Members.status())
+             |> start_sync_status_polling()
+             |> assign_flash(:info, l("A Ghost member and staff backfill is already running."))}
+
+          {:ok, %Oban.Job{} = job} ->
+            status = put_member_sync_queued_status(job)
 
             {:noreply,
              socket
@@ -147,7 +115,7 @@ defmodule Bonfire.Ghost.LiveHandler do
              |> assign_flash(
                :info,
                l(
-                 "Ghost member & staff backfill started. Progress is shown below; tiers sync first, then members, then staff."
+                 "Ghost member & staff backfill started. Progress is shown below; tiers sync first, then staff, then members."
                )
              )}
 
@@ -209,6 +177,56 @@ defmodule Bonfire.Ghost.LiveHandler do
                l("Article backfill could not be started: %{reason}", reason: inspect(reason))
              )}
         end
+    end
+  end
+
+  defp do_sync_tiers(socket) do
+    opts = [
+      current_user: current_user(socket),
+      current_account: current_account(socket)
+    ]
+
+    case Sync.Tiers.sync_all(opts) do
+      {:ok, summary, tiers} ->
+        {flash_type, message} = sync_flash(summary)
+
+        {:noreply,
+         socket
+         |> assign(
+           syncing: false,
+           tiers: tiers,
+           last_sync: %{at: DateTime.utc_now(), summary: summary}
+         )
+         |> assign_flash(flash_type, message)}
+
+      {:error, :not_configured} ->
+        {:noreply,
+         socket
+         |> assign(:syncing, false)
+         |> assign_flash(:error, l("Ghost Admin API is not configured"))}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:syncing, false)
+         |> assign_flash(:error, l("Ghost tier sync failed: %{reason}", reason: inspect(reason)))}
+    end
+  end
+
+  # Oban may start the job before `insert/1` returns. Preserve a status already stamped by that worker instead of overwriting real progress with `queued`.
+  defp put_member_sync_queued_status(job) do
+    case Sync.Members.status() do
+      %{job_id: job_id} = status when job_id == job.id ->
+        status
+
+      _ ->
+        Sync.Members.put_status(%{
+          state: :queued,
+          stage: :tiers,
+          stages: %{},
+          job_id: job.id,
+          started_at: DateTime.utc_now()
+        })
     end
   end
 

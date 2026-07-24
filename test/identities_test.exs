@@ -25,6 +25,7 @@ defmodule Bonfire.Ghost.IdentitiesTest do
   alias Bonfire.Me.Accounts
   alias Bonfire.Me.Fake
   alias Bonfire.Me.Users
+  alias Bonfire.Posts.Fake, as: PostsFake
 
   # a Ghost staff payload — no "tiers" key, staff are not members
   defp staff(email, opts \\ []) do
@@ -57,6 +58,20 @@ defmodule Bonfire.Ghost.IdentitiesTest do
       |> Bonfire.Common.Repo.update()
 
     Accounts.get_by_email(new_email)
+  end
+
+  defp mark_as_imported_author!(user, slug) do
+    blog_url = "https://ghost-identity-recovery.test"
+    Process.put([:bonfire_ghost, :ghost_url], blog_url)
+    post = PostsFake.fake_post!(user)
+
+    assert {:ok, _peered} =
+             Bonfire.Federate.ActivityPub.Peered.save_canonical_uri(
+               post,
+               "#{blog_url}/#{slug}/"
+             )
+
+    post
   end
 
   describe "link/get" do
@@ -310,11 +325,25 @@ defmodule Bonfire.Ghost.IdentitiesTest do
       e1 = unique_email("conflict")
 
       assert {:ok, account} = Members.provision_from_ghost_staff(staff(e1, id: "s21"))
-      assert {:ok, resolved} = Members.provision_from_ghost_staff(staff(other_email, id: "s21"))
+
+      assert {:ok, resolved} =
+               Members.provision_from_ghost_staff(staff(other_email, id: "s21"),
+                 profileless_account: other
+               )
 
       assert resolved.id == account.id
       assert Accounts.get_by_email(e1).id == account.id
       assert Accounts.get_by_email(other_email).id == other.id
+      assert Identities.get_by_staff_id("s21").ghost_email == e1
+
+      set_local_email!(other, unique_email("conflict-cleared"))
+
+      assert {:ok, retried} =
+               Members.provision_from_ghost_staff(staff(other_email, id: "s21"))
+
+      assert retried.id == account.id
+      assert Accounts.get_by_email(other_email).id == account.id
+      assert Identities.get_by_staff_id("s21").ghost_email == other_email
     end
   end
 
@@ -423,6 +452,120 @@ defmodule Bonfire.Ghost.IdentitiesTest do
              ) == nil
 
       assert Identities.get_by_staff_id("s51") == nil
+    end
+
+    test "claims a legacy article-author account when an imported Ghost article proves ownership" do
+      old_email = unique_email("legacy-article")
+      new_email = unique_email("legacy-article-new")
+      account = Fake.fake_account!() |> set_local_email!(old_email)
+
+      {:ok, user} =
+        Users.create(
+          %{profile: %{name: "Legacy Author"}, character: %{username: "legacyarticle"}},
+          account
+        )
+
+      mark_as_imported_author!(user, "a-legacy-article")
+
+      assert {:ok, claimed} =
+               Members.claim_split_author(staff(new_email, id: "s53", slug: "legacy-article"))
+
+      assert claimed.id == account.id
+      assert Accounts.get_by_email(new_email).id == account.id
+      assert Identities.get_by_staff_id("s53").user_id == user.id
+    end
+
+    test "a later staff sync recovers an imported author from an already-linked empty fork" do
+      old_email = unique_email("original-author")
+      new_email = unique_email("empty-fork")
+      original_account = Fake.fake_account!() |> set_local_email!(old_email)
+
+      {:ok, original_user} =
+        Users.create(
+          %{profile: %{name: "Original Author"}, character: %{username: "originalauthor"}},
+          original_account
+        )
+
+      mark_as_imported_author!(original_user, "original-article")
+
+      assert {:ok, empty_fork} =
+               Members.provision_from_ghost_staff(
+                 staff(new_email, id: "s54", slug: "original-author")
+               )
+
+      assert Users.by_account!(empty_fork) == []
+      assert Identities.get_by_staff_id("s54").account_id == empty_fork.id
+
+      assert {:ok, recovered_account} =
+               Members.provision_from_ghost_staff(
+                 staff(new_email, id: "s54", slug: "original-author")
+               )
+
+      assert recovered_account.id == original_account.id
+      assert Accounts.get_by_email(new_email).id == original_account.id
+      assert Identities.get_by_staff_id("s54").user_id == original_user.id
+      assert Identities.get_by_staff_id("s54").account_id == original_account.id
+      assert Users.by_account!(empty_fork) == []
+    end
+
+    test "a later staff sync recovers an exact legacy profile from its backfill-created empty fork" do
+      old_email = unique_email("legacy-profile-before")
+      new_email = unique_email("legacy-profile-after")
+      original_account = Fake.fake_account!() |> set_local_email!(old_email)
+
+      {:ok, original_user} =
+        Users.create(
+          %{
+            profile: %{name: "Legacy Redaktion"},
+            character: %{username: "legacyredaktion"}
+          },
+          original_account
+        )
+
+      payload =
+        staff(new_email,
+          id: "s54-legacy-profile",
+          slug: "legacy-redaktion",
+          name: "Legacy Redaktion"
+        )
+
+      assert {:ok, empty_fork} = Members.provision_from_ghost_staff(payload)
+      assert Users.by_account!(empty_fork) == []
+      assert Identities.get_by_staff_id("s54-legacy-profile").account_id == empty_fork.id
+
+      assert {:ok, recovered_account} = Members.provision_from_ghost_staff(payload)
+
+      assert recovered_account.id == original_account.id
+      assert Accounts.get_by_email(new_email).id == original_account.id
+      assert Identities.get_by_staff_id("s54-legacy-profile").user_id == original_user.id
+      assert Identities.get_by_staff_id("s54-legacy-profile").account_id == original_account.id
+      assert Users.by_account!(empty_fork) == []
+    end
+
+    test "an already-linked empty fork does NOT seize an ordinary account with a matching username" do
+      original_email = unique_email("ordinary-account")
+      ghost_email = unique_email("ordinary-empty-fork")
+      ordinary_account = Fake.fake_account!() |> set_local_email!(original_email)
+
+      {:ok, _ordinary_user} =
+        Users.create(
+          %{profile: %{name: "Ordinary"}, character: %{username: "ordinaryauthor"}},
+          ordinary_account
+        )
+
+      assert {:ok, empty_fork} =
+               Members.provision_from_ghost_staff(
+                 staff(ghost_email, id: "s55", slug: "ordinary-author")
+               )
+
+      assert {:ok, resolved_account} =
+               Members.provision_from_ghost_staff(
+                 staff(ghost_email, id: "s55", slug: "ordinary-author")
+               )
+
+      assert resolved_account.id == empty_fork.id
+      assert Accounts.get_by_email(original_email).id == ordinary_account.id
+      assert Identities.get_by_staff_id("s55").account_id == empty_fork.id
     end
 
     test "does NOT claim an account with several profiles" do

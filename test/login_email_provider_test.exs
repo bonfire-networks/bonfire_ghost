@@ -63,8 +63,8 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
   end
 
   # Stub the Admin API so `ensure_account/1` runs its real logic against a known payload.
-  # The staff lookup runs whenever the member lookup misses (or fails the tier gate), so
-  # it always needs a stub too — "no staff" by default.
+  # The staff lookup also runs for an allowed member so a dual member/staff identity can
+  # resolve through its author link first. It always needs a stub — "no staff" by default.
   defp stub_members(result, staff_result \\ {:ok, %{"users" => []}}) do
     Repatch.patch(Ghost, :admin_configured?, fn -> true end)
     Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
@@ -206,6 +206,10 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
          }}
       end)
 
+      Repatch.patch(AdminAPI, :get_user_by_email, fn :client, ^apostrophe ->
+        {:ok, %{"users" => []}}
+      end)
+
       assert {:ok, _account} = LoginEmailProvider.ensure_account(apostrophe),
              "a paying member with an apostrophe in their address was refused a login"
 
@@ -289,7 +293,7 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
       assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
     end
 
-    test "a member on an ALLOWED tier never costs a staff lookup" do
+    test "a member on an allowed tier is also checked for a staff identity" do
       require_tiers(["paid"])
       test_pid = self()
 
@@ -306,7 +310,19 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
       end)
 
       assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
-      refute_received :staff_lookup
+      assert_received :staff_lookup
+    end
+
+    test "a staff lookup failure does not turn away an otherwise allowed member" do
+      require_tiers(["paid"])
+
+      stub_members(
+        {:ok, %{"members" => [member(["paid"])]}},
+        {:error, :staff_endpoint_unavailable}
+      )
+
+      assert {:ok, _account} = LoginEmailProvider.ensure_account(@email)
+      assert Bonfire.Me.Accounts.get_by_email(@email)
     end
   end
 
@@ -329,6 +345,13 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
         assert {_, @email} = hd(email.to)
       end)
 
+      refute_email_sent()
+    end
+
+    test "an upstream provider failure does not send a misleading registration hint" do
+      stub_members({:error, :upstream_unavailable})
+
+      assert :no_match = Bonfire.UI.Me.LoginEmailProvider.ensure([LoginEmailProvider], @email)
       refute_email_sent()
     end
   end

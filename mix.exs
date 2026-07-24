@@ -1,4 +1,4 @@
-Code.eval_file("mess.exs", (if File.exists?("../../lib/mix/mess.exs"), do: "../../lib/mix/"))
+Code.eval_file("mess.exs", if(File.exists?("../../lib/mix/mess.exs"), do: "../../lib/mix/"))
 
 defmodule Bonfire.Ghost.MixProject do
   use Mix.Project
@@ -13,17 +13,16 @@ defmodule Bonfire.Ghost.MixProject do
       ]
     else
       []
-    end
-    ++
-    [
-      app: :bonfire_ghost,
-      version: "0.0.1",
-      elixir: "~> 1.10",
-      elixirc_paths: elixirc_paths(Mix.env()),
-      compilers: Mix.compilers() ++ [:surface],
-      start_permanent: Mix.env() == :prod,
-      aliases: aliases(),
-      description: "An extension for Bonfire",
+    end ++
+      [
+        app: :bonfire_ghost,
+        version: "0.0.1",
+        elixir: "~> 1.10",
+        elixirc_paths: elixirc_paths(Mix.env()),
+        compilers: Mix.compilers() ++ [:surface],
+        start_permanent: Mix.env() == :prod,
+        aliases: aliases(),
+        description: "An extension for Bonfire",
         homepage_url: "https://bonfirenetworks.org/",
         source_url: "https://github.com/bonfire-networks/bonfire_ghost",
         package: [
@@ -39,13 +38,17 @@ defmodule Bonfire.Ghost.MixProject do
           # extra pages to include
           extras: ["README.md"]
         ],
-      deps:
-        Mess.deps([
-          {:phoenix_live_reload, "~> 1.2", only: :dev},
-          {:floki, ">= 0.0.0", only: [:dev, :test]},
-          {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
-        ])
-    ]
+        deps:
+          Mess.deps([
+            {:phoenix_live_reload, "~> 1.2", only: :dev},
+            {:floki, ">= 0.0.0", only: [:dev, :test]},
+            {:bonfire_ui_me,
+             git: "https://github.com/bonfire-networks/bonfire_ui_me",
+             optional: true,
+             runtime: false},
+            {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+          ])
+      ]
   end
 
   def application, do: [extra_applications: [:logger, :runtime_tools]]

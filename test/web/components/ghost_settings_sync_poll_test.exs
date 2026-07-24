@@ -10,10 +10,12 @@ defmodule Bonfire.Ghost.Web.GhostSettingsSyncPollTest do
   use Repatch.ExUnit
 
   alias Bonfire.Ghost.Sync.Articles
+  alias Bonfire.Ghost.Sync.Members
   alias Bonfire.Ghost.Web.GhostSettingsLive
 
   setup do
     Articles.clear_status()
+    Members.clear_status()
     :ok
   end
 

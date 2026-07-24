@@ -1,4 +1,4 @@
-defmodule Bonfire.Ghost.Repo.Migrations.GhostIdentities do
+defmodule Bonfire.Ghost.Repo.Migrations.PreserveGhostIdentityShape do
   @moduledoc false
   use Ecto.Migration
   import Needle.Migration
@@ -7,16 +7,11 @@ defmodule Bonfire.Ghost.Repo.Migrations.GhostIdentities do
   @pointer_table Needle.Pointer.__schema__(:source)
 
   def up do
-    # Preserve any superseded table shape: production may already contain valid identity links, and rebuilding them from mutable email addresses is not lossless.
     create_if_not_exists table(@table, primary_key: false) do
-      # one row per person: the account is the identity anchor
       add_pointer(:account_id, :strong, Needle.Pointer, primary_key: true)
-      # the author/attribution profile, once known
       add_pointer(:user_id, :weak)
-      # Ghost staff users and members use separate ID spaces, and one person can have both.
       add(:ghost_member_id, :text)
       add(:ghost_staff_id, :text)
-      # The last Ghost email distinguishes a Ghost-side change from a local choice.
       add(:ghost_email, :text)
       timestamps()
     end
@@ -36,11 +31,8 @@ defmodule Bonfire.Ghost.Repo.Migrations.GhostIdentities do
     create_if_not_exists(index(@table, [:user_id]))
   end
 
-  def down do
-    drop_if_exists(table(@table))
-  end
+  def down, do: :ok
 
-  # `add_if_not_exists` with an Ecto reference still attempts to recreate the foreign-key constraint, so guard the whole operation at the database level.
   defp ensure_columns do
     execute("""
     DO $$

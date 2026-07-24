@@ -25,6 +25,7 @@ defmodule Bonfire.Ghost.Sync.Members do
   """
 
   import Untangle
+  import Ecto.Query
   use Bonfire.Common.E
   use Bonfire.Common.Settings
 
@@ -36,6 +37,8 @@ defmodule Bonfire.Ghost.Sync.Members do
   alias Bonfire.Me.Characters
   alias Bonfire.Me.Users
   alias Bonfire.Data.Identity.Email
+  alias Bonfire.Data.ActivityPub.Peered
+  alias Bonfire.Data.Social.Created
   alias Bonfire.Ghost
   alias Bonfire.Ghost.AdminAPI
   alias Bonfire.Ghost.Identities
@@ -63,9 +66,9 @@ defmodule Bonfire.Ghost.Sync.Members do
   @doc """
   Status of the last member/staff backfill, for the settings UI, or nil if none ran recently.
 
-  A map with `:state` (`:queued` | `:running` | `:done` | `:failed`), the `:stage` currently running (`:tiers` | `:members` | `:staff`), per-stage counters, a capped `:errors` list, and timestamps — including `:updated_at`, which acts as a heartbeat so a job that died mid-run can be told apart from one still working.
+  A map with `:state` (`:queued` | `:running` | `:done` | `:failed`), the `:stage` currently running (`:tiers` | `:staff` | `:members`), per-stage counters, a capped `:errors` list, and timestamps — including `:updated_at`, which is refreshed after every API page so a job that died mid-run can be told apart from one still working.
 
-  Without this, the backfill was entirely unobservable: the settings page said "started" and nothing else, so a staff pass that never ran (the member pass short-circuits it on failure) looked identical to one that worked.
+  Without this, the backfill was entirely unobservable: the settings page said "started" and nothing else, so a stage that had not started looked identical to one that was still processing.
   """
   def status, do: Cache.get!(@status_cache_key)
 
@@ -84,15 +87,28 @@ defmodule Bonfire.Ghost.Sync.Members do
   The displayable counters for one stage's summary (`:tiers`, `:members` or `:staff`).
 
   Pure — the caller accumulates these into the status map and persists once, rather than each stage re-reading the shared cache to append itself (which, across the minutes-long staff pass, could lose the earlier stages and report them as "did not run").
+
+      iex> Bonfire.Ghost.Sync.Members.stage_counts(%{created: 2, errors: nil})
+      %{archived: 0, created: 2, errors: [], errors_count: 0, provisioned: 0, skipped: 0, unchanged: 0, updated: 0}
   """
   def stage_counts(summary) when is_map(summary) do
+    errors = normalize_errors(Map.get(summary, :errors))
+
     %{
       provisioned: Map.get(summary, :provisioned, 0),
       skipped: Map.get(summary, :skipped, 0),
-      errors_count: length(Map.get(summary, :errors, [])),
-      errors: stored_errors(Map.get(summary, :errors, []))
+      created: Map.get(summary, :created, 0),
+      updated: Map.get(summary, :updated, 0),
+      unchanged: Map.get(summary, :unchanged, 0),
+      archived: Map.get(summary, :archived, 0),
+      errors_count: length(errors),
+      errors: stored_errors(errors)
     }
   end
+
+  defp normalize_errors(errors) when is_list(errors), do: errors
+  defp normalize_errors(nil), do: []
+  defp normalize_errors(error), do: [error]
 
   defp stored_errors(errors) do
     errors
@@ -354,7 +370,7 @@ defmodule Bonfire.Ghost.Sync.Members do
 
   Deliberately conservative, because a wrong match hands one person's account to another: it rewrites the account's login email and signs the claimant in. ALL of these must hold: the staff slug resolves to a local username, that user's account carries the Ghost-provisioned stash marker, it is the account's only profile, and the account is not a *member's* (a subscriber who picked a colliding handle must never be claimed — checked against the stashed provisioning kind, and for accounts stashed before that kind was recorded, by confirming their address is not a Ghost member's).
 
-  Anything else returns nil and normal provisioning applies; stranded author-path accounts (which carry no stash marker) are repaired via the operator runbook instead. Pass `client:` to enable the legacy check — without it, unlabelled accounts are refused.
+  Anything else returns nil and normal provisioning applies. Legacy article-author accounts without a stash marker are only eligible when the staff slug matches the local username and that sole profile authored an object imported from the configured Ghost site. Pass `client:` to enable the ambiguous legacy-stash member check.
   """
   def claim_split_author(staff, opts \\ [])
 
@@ -367,7 +383,7 @@ defmodule Bonfire.Ghost.Sync.Members do
            %{} = account <- e(user, :accounted, :account, nil),
            [%{id: only_id}] <- Users.by_account!(account),
            true <- only_id == user.id,
-           true <- claimable_staff_account?(account, opts) do
+           true <- claimable_staff_account?(account, user, opts) do
         info(
           "Reconnecting Ghost staff #{ghost_id} to the stranded local account of @#{e(user, :character, :username, nil)}"
         )
@@ -393,10 +409,10 @@ defmodule Bonfire.Ghost.Sync.Members do
   # WHAT. Only staff accounts may be claimed by a staff sign-in. Accounts stashed
   # before `kind` was recorded are ambiguous, so they are only claimable once Ghost
   # confirms their address belongs to no member — fail closed without a client.
-  defp claimable_staff_account?(account, opts) do
+  defp claimable_staff_account?(account, user, opts) do
     case ghost_stash(account) do
       nil ->
-        false
+        imported_ghost_author?(user)
 
       stash ->
         case to_string(e(stash, :kind, "")) do
@@ -407,10 +423,38 @@ defmodule Bonfire.Ghost.Sync.Members do
             false
 
           _ ->
-            not member_email?(account_email(account), opts[:client])
+            not member_email?(account_email(account), opts[:client]) ||
+              imported_ghost_author?(user)
         end
     end
   end
+
+  # A legacy article-author account predates the Ghost provisioning stash. An exact
+  # staff-slug → username match is only safe to claim when the same profile actually
+  # authored an imported object from this configured Ghost site.
+  defp imported_ghost_author?(%{id: user_id}) when is_binary(user_id) do
+    case Ghost.ghost_url() do
+      url when is_binary(url) and url != "" ->
+        prefix = String.trim_trailing(url, "/") <> "/%"
+
+        Ghost.repo().exists?(
+          from(c in Created,
+            join: p in Peered,
+            on: p.id == c.id,
+            where: c.creator_id == ^user_id and like(p.canonical_uri, ^prefix)
+          )
+        )
+
+      _ ->
+        false
+    end
+  rescue
+    e ->
+      warn(e, "Could not verify whether the staff candidate authored an imported Ghost article")
+      false
+  end
+
+  defp imported_ghost_author?(_), do: false
 
   defp member_email?(email, client)
        when is_binary(email) and email != "" and not is_nil(client) do
@@ -425,8 +469,8 @@ defmodule Bonfire.Ghost.Sync.Members do
   defp member_email?(_email, _client), do: true
 
   defp find_local_user_by_slug(slug) when is_binary(slug) and slug != "" do
-    [slug, String.replace(slug, "-", ""), String.replace(slug, "-", "_")]
-    |> Enum.uniq()
+    slug
+    |> staff_slug_candidates()
     |> Enum.find_value(fn candidate ->
       case Users.by_username(candidate) do
         {:ok, user} -> user
@@ -436,6 +480,13 @@ defmodule Bonfire.Ghost.Sync.Members do
   end
 
   defp find_local_user_by_slug(_), do: nil
+
+  defp staff_slug_candidates(slug) when is_binary(slug) and slug != "" do
+    [slug, String.replace(slug, "-", ""), String.replace(slug, "-", "_")]
+    |> Enum.uniq()
+  end
+
+  defp staff_slug_candidates(_), do: []
 
   @doc """
   Handles `member.deleted` — removes the user from all `ghost_tier:*` circles.
@@ -487,18 +538,7 @@ defmodule Bonfire.Ghost.Sync.Members do
       end
   end
 
-  @doc """
-  Diffs the user's current `ghost_tier:*` circles against the tiers listed in
-  the Ghost payload, adding and removing memberships so they match. Non-ghost
-  circles are left untouched.
-
-  Tier slugs without a local `ghost_tier:<slug>` circle (i.e. `Sync.Tiers`
-  hasn't caught up with Ghost yet) are skipped — reconciliation will pick
-  them up on the next member-sync after the tier sync runs.
-  """
-  # `reconcile_tiers: false` skips reconciliation entirely — used by the article-author path,
-  # whose Ghost *staff* payload has no tiers to reconcile (and looking them up as a member would
-  # be a usually-futile round-trip on the embed mount's critical path).
+  # `reconcile_tiers: false` skips reconciliation entirely for the article-author path, whose Ghost staff payload has no tiers and should not trigger a Members API round trip.
   defp maybe_reconcile_circles(user, ghost_member, opts) do
     if Keyword.get(opts, :reconcile_tiers, true) do
       reconcile_circles(user, ghost_member, opts)
@@ -507,6 +547,11 @@ defmodule Bonfire.Ghost.Sync.Members do
     end
   end
 
+  @doc """
+  Diffs the user's current `ghost_tier:*` circles against the tiers listed in the Ghost payload, leaving non-Ghost circles untouched.
+
+  Tier slugs without a local `ghost_tier:<slug>` circle are skipped and picked up after the next tier sync.
+  """
   @spec reconcile_circles(Bonfire.Data.Identity.User.t(), map(), keyword()) :: {:ok, diff()}
   def reconcile_circles(user, ghost_member, opts \\ [])
 
@@ -578,6 +623,7 @@ defmodule Bonfire.Ghost.Sync.Members do
       case list_members(client, page, opts) do
         {:ok, %{"members" => members, "meta" => meta}} when is_list(members) ->
           summary = Enum.reduce(members, summary, &sync_member(&1, &2, opts))
+          report_page_progress(opts, page, summary)
 
           case next_page(meta) do
             nil ->
@@ -596,7 +642,9 @@ defmodule Bonfire.Ghost.Sync.Members do
           end
 
         {:ok, %{"members" => members}} when is_list(members) ->
-          {:ok, Enum.reduce(members, summary, &sync_member(&1, &2, opts))}
+          summary = Enum.reduce(members, summary, &sync_member(&1, &2, opts))
+          report_page_progress(opts, page, summary)
+          {:ok, summary}
 
         {:ok, other} ->
           error(other, "Ghost members backfill returned an unexpected payload")
@@ -612,9 +660,9 @@ defmodule Bonfire.Ghost.Sync.Members do
     AdminAPI.list_members(client,
       limit: Keyword.get(opts, :page_size, @page_size),
       page: page,
-      # Stable ascending order so members deleted mid-run shift already-processed
-      # rows instead of silently skipping unfetched ones.
-      order: "created_at asc",
+      # Bulk imports can give many members the same timestamp. ID breaks ties so
+      # page boundaries cannot repeat some members while silently skipping others.
+      order: "created_at asc,id asc",
       include: @members_include
     )
   end
@@ -628,6 +676,8 @@ defmodule Bonfire.Ghost.Sync.Members do
             Enum.reduce(users, summary, fn user, acc ->
               sync_member(user, acc, opts, &provision_from_ghost_staff/2)
             end)
+
+          report_page_progress(opts, page, summary)
 
           case next_page(meta) do
             nil ->
@@ -646,10 +696,13 @@ defmodule Bonfire.Ghost.Sync.Members do
           end
 
         {:ok, %{"users" => users}} when is_list(users) ->
-          {:ok,
-           Enum.reduce(users, summary, fn user, acc ->
-             sync_member(user, acc, opts, &provision_from_ghost_staff/2)
-           end)}
+          summary =
+            Enum.reduce(users, summary, fn user, acc ->
+              sync_member(user, acc, opts, &provision_from_ghost_staff/2)
+            end)
+
+          report_page_progress(opts, page, summary)
+          {:ok, summary}
 
         {:ok, other} ->
           error(other, "Ghost staff backfill returned an unexpected payload")
@@ -665,10 +718,19 @@ defmodule Bonfire.Ghost.Sync.Members do
     AdminAPI.list_users(client,
       limit: Keyword.get(opts, :page_size, @page_size),
       page: page,
-      order: "created_at asc",
+      # Bulk imports share timestamps; ID breaks ties so page boundaries cannot
+      # repeat some staff while silently skipping others.
+      order: "created_at asc,id asc",
       # staff suspended in Ghost must not get accounts, and Ghost returns them unless filtered
       filter: AdminAPI.signin_staff_filter()
     )
+  end
+
+  defp report_page_progress(opts, page, summary) do
+    case opts[:on_progress] do
+      callback when is_function(callback, 2) -> callback.(page, summary)
+      _ -> :ok
+    end
   end
 
   defp sync_member(member, summary, opts, provision \\ &provision_from_ghost_member/2) do
@@ -708,14 +770,208 @@ defmodule Bonfire.Ghost.Sync.Members do
   # change on EITHER side can no longer fork a duplicate identity. Email remains
   # the fallback for identities provisioned before the link existed — which then
   # get linked by `record_identity`.
-  defp lookup_identity(%{"id" => ghost_id}, opts) when is_binary(ghost_id) and ghost_id != "" do
+  defp lookup_identity(%{"id" => ghost_id} = ghost_identity, opts)
+       when is_binary(ghost_id) and ghost_id != "" do
     case ghost_kind(opts) do
-      "staff" -> Identities.get_by_staff_id(ghost_id)
-      _ -> Identities.get_by_member_id(ghost_id)
+      "staff" ->
+        ghost_id
+        |> Identities.get_by_staff_id()
+        |> maybe_recover_empty_staff_link(ghost_identity, opts)
+        |> maybe_recover_conflicting_staff_account(ghost_identity, opts)
+
+      _ ->
+        Identities.get_by_member_id(ghost_id)
     end
   end
 
   defp lookup_identity(_ghost_member, _opts), do: nil
+
+  # Repairs the precise failure left by an incomplete pre-link backfill: a changed Ghost email created an account-only fork that now owns the staff ID. The normal claim guards still apply; a legacy profile without their newer markers needs corroboration from the fork's exact Ghost provenance plus its own slug, name, age and email shape.
+  defp maybe_recover_empty_staff_link(nil, _staff, _opts), do: nil
+
+  defp maybe_recover_empty_staff_link(identity, staff, opts) do
+    with %{} = linked_account <- Identities.load_account(identity),
+         [] <- Users.by_account!(linked_account),
+         %{} = original_user <- find_local_user_by_slug(staff["slug"]),
+         original_user <-
+           Bonfire.Common.Repo.maybe_preload(original_user,
+             accounted: [account: [:email, :settings]]
+           ),
+         %{} = original_account <- e(original_user, :accounted, :account, nil),
+         true <- original_account.id != linked_account.id,
+         [%{id: only_id}] <- Users.by_account!(original_account),
+         true <- only_id == original_user.id,
+         true <-
+           recoverable_empty_staff_target?(
+             original_account,
+             original_user,
+             linked_account,
+             staff,
+             opts
+           ),
+         {:ok, repaired_identity} <-
+           transfer_empty_staff_link(
+             identity,
+             linked_account,
+             original_account,
+             original_user,
+             staff
+           ) do
+      info(
+        "Recovered Ghost staff #{staff["id"]} from an empty fork and relinked @#{e(original_user, :character, :username, nil)}"
+      )
+
+      repaired_identity
+    else
+      _ -> Identities.get_by_staff_id(staff["id"]) || identity
+    end
+  end
+
+  defp recoverable_empty_staff_target?(
+         original_account,
+         original_user,
+         linked_account,
+         staff,
+         opts
+       ) do
+    claimable_staff_account?(original_account, original_user, opts) ||
+      exact_legacy_staff_target?(original_account, original_user, linked_account, staff)
+  end
+
+  # Pre-marker author profiles cannot prove their origin themselves. A backfill-created
+  # fork can: it is empty, linked by the exact staff ID, and carries the staff stash
+  # written while Ghost was authoritative. Requiring the older target's sole profile to
+  # match both slug and display name keeps a coincidental username from being claimed.
+  defp exact_legacy_staff_target?(original_account, original_user, linked_account, staff) do
+    staff_name = normalized_identity_name(staff["name"])
+    profile_name = normalized_identity_name(e(original_user, :profile, :name, nil))
+
+    case {ghost_stash(original_account), ghost_stash(linked_account)} do
+      {nil, linked_stash} when not is_nil(linked_stash) ->
+        is_binary(staff_name) and
+          profile_name == staff_name and
+          normalized_identity_name(e(linked_stash, :name, nil)) == staff_name and
+          to_string(e(linked_stash, :kind, "")) == "staff" and
+          to_string(e(linked_stash, :ghost_id, "")) == staff["id"] and
+          e(original_user, :character, :username, nil) in staff_slug_candidates(staff["slug"]) and
+          older_account?(original_account, linked_account) and
+          email_matches?(account_email(linked_account), staff["email"]) and
+          not email_matches?(account_email(original_account), staff["email"])
+
+      _ ->
+        false
+    end
+  end
+
+  # Bonfire IDs are ULIDs, whose lexical order is chronological.
+  defp older_account?(%{id: older_id}, %{id: newer_id})
+       when is_binary(older_id) and is_binary(newer_id),
+       do: older_id < newer_id
+
+  defp older_account?(_, _), do: false
+
+  defp normalized_identity_name(name) when is_binary(name) do
+    case name |> String.normalize(:nfc) |> String.trim() |> String.replace(~r/\s+/, " ") do
+      "" -> nil
+      normalized -> String.downcase(normalized)
+    end
+  end
+
+  defp normalized_identity_name(_), do: nil
+
+  defp email_matches?(left, right) when is_binary(left) and is_binary(right),
+    do: String.downcase(left) == String.downcase(right)
+
+  defp email_matches?(_, _), do: false
+
+  defp transfer_empty_staff_link(identity, linked_account, original_account, original_user, staff) do
+    ghost_email = staff["email"]
+    quarantine_email = "ghost-orphan-#{String.downcase(linked_account.id)}@invalid"
+
+    Ghost.repo().transact_with(fn ->
+      with {:ok, _quarantined_account} <-
+             persist_account_email(linked_account, quarantine_email),
+           {:ok, original_account} <- persist_account_email(original_account, ghost_email),
+           {:ok, _deleted_identity} <- Ghost.repo().delete(identity),
+           {:ok, repaired_identity} <-
+             Identities.link(original_account,
+               staff_id: staff["id"],
+               member_id: identity.ghost_member_id,
+               user: original_user,
+               ghost_email: ghost_email
+             ) do
+        {:ok, repaired_identity}
+      end
+    end)
+  end
+
+  # Repairs the complementary split: the staff ID still points to the original author, but a prior failed sign-in left a different profileless account holding Ghost's new email. The controller supplies that exact account; all author-claim guards still have to pass before its email is quarantined.
+  defp maybe_recover_conflicting_staff_account(nil, _staff, _opts), do: nil
+
+  defp maybe_recover_conflicting_staff_account(identity, staff, opts) do
+    with %{} = conflicting_account <- opts[:profileless_account],
+         conflicting_account <-
+           Bonfire.Common.Repo.maybe_preload(conflicting_account, [:email, :settings]),
+         true <- account_email(conflicting_account) == staff["email"],
+         [] <- Users.by_account!(conflicting_account),
+         true <- recoverable_conflicting_staff_account?(conflicting_account, staff),
+         %{} = linked_account <- Identities.load_account(identity),
+         true <- linked_account.id != conflicting_account.id,
+         %{} = linked_user <- find_local_user_by_slug(staff["slug"]),
+         linked_user <-
+           Bonfire.Common.Repo.maybe_preload(linked_user,
+             accounted: [account: [:email, :settings]]
+           ),
+         %{} = author_account <- e(linked_user, :accounted, :account, nil),
+         true <- author_account.id == linked_account.id,
+         [%{id: only_id}] <- Users.by_account!(author_account),
+         true <- only_id == linked_user.id,
+         true <- claimable_staff_account?(author_account, linked_user, opts),
+         {:ok, _updated_account} <-
+           transfer_conflicting_staff_email(conflicting_account, author_account, staff["email"]) do
+      info(
+        "Recovered Ghost staff #{staff["id"]} from a conflicting empty account and restored @#{e(linked_user, :character, :username, nil)}"
+      )
+
+      identity
+    else
+      _ -> identity
+    end
+  end
+
+  defp recoverable_conflicting_staff_account?(account, staff) do
+    case {Identities.get_by_account(account), ghost_stash(account)} do
+      {nil, stash} when not is_nil(stash) ->
+        to_string(e(stash, :kind, "")) == "staff" and
+          to_string(e(stash, :ghost_id, "")) == staff["id"]
+
+      _ ->
+        false
+    end
+  end
+
+  defp transfer_conflicting_staff_email(conflicting_account, author_account, ghost_email) do
+    quarantine_email = "ghost-orphan-#{String.downcase(conflicting_account.id)}@invalid"
+
+    Ghost.repo().transact_with(fn ->
+      with {:ok, _quarantined_account} <-
+             persist_account_email(conflicting_account, quarantine_email),
+           {:ok, updated_account} <- persist_account_email(author_account, ghost_email) do
+        {:ok, updated_account}
+      end
+    end)
+  end
+
+  defp persist_account_email(account, email) do
+    account = Bonfire.Common.Repo.maybe_preload(account, :email)
+
+    case account.email
+         |> Email.changeset(%{email_address: email}, must_confirm?: false)
+         |> Bonfire.Common.Repo.update() do
+      {:ok, email_mixin} -> {:ok, %{account | email: email_mixin}}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
 
   defp resolve_account(nil, email), do: ensure_account(email)
 
@@ -781,11 +1037,12 @@ defmodule Bonfire.Ghost.Sync.Members do
   defp record_identity(%{"id" => ghost_id} = ghost_member, account, user, opts)
        when is_binary(ghost_id) and ghost_id != "" do
     id_field = if ghost_kind(opts) == "staff", do: :staff_id, else: :member_id
+    ghost_email = ghost_email_to_record(ghost_member, account, opts)
 
     case Identities.link(account, [
            {id_field, ghost_id},
            {:user, user},
-           {:ghost_email, ghost_member["email"]}
+           {:ghost_email, ghost_email}
          ]) do
       {:ok, _} -> :ok
       other -> warn(other, "Could not record the Ghost identity link")
@@ -793,6 +1050,21 @@ defmodule Bonfire.Ghost.Sync.Members do
   end
 
   defp record_identity(_ghost_member, _account, _user, _opts), do: :ok
+
+  # If following a Ghost-side change failed because another account owns the new address, keep the previous marker so a later retry can still recognize that the local email tracks Ghost. A genuine local override differs from the previous marker and continues recording Ghost's latest address.
+  defp ghost_email_to_record(%{"email" => ghost_email, "id" => ghost_id}, account, opts) do
+    identity =
+      if ghost_kind(opts) == "staff",
+        do: Identities.get_by_staff_id(ghost_id),
+        else: Identities.get_by_member_id(ghost_id)
+
+    current_email = account_email(account)
+    last_ghost_email = e(identity, :ghost_email, nil)
+
+    if current_email != ghost_email and current_email == last_ghost_email,
+      do: last_ghost_email,
+      else: ghost_email
+  end
 
   defp ghost_kind(opts), do: Keyword.get(opts, :ghost_kind, "member")
 
@@ -822,7 +1094,7 @@ defmodule Bonfire.Ghost.Sync.Members do
   # `preferred_user_id` is the identity link's user: on an account with several
   # profiles, attribution must go to the linked author profile, not whichever
   # user happens to come first.
-  defp ensure_user(account, ghost_member, new? \\ false, preferred_user_id \\ nil) do
+  defp ensure_user(account, ghost_member, new?, preferred_user_id) do
     existing =
       if !new? do
         users = Users.by_account!(account)

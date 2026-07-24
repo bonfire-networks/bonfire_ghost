@@ -20,6 +20,54 @@ defmodule Bonfire.Ghost.LiveHandlerTest do
     assert_enqueued(worker: MemberSyncWorker, args: %{})
   end
 
+  test "a second sync_members click preserves the in-flight status instead of resetting it" do
+    Repatch.patch(Bonfire.Ghost, :admin_configured?, fn -> true end)
+    Repatch.patch(LiveHandler, :can_configure_instance?, fn _socket -> true end)
+    Sync.Members.clear_status()
+
+    assert {:noreply, _socket} = LiveHandler.handle_event("sync_members", %{}, socket())
+
+    running_status =
+      Sync.Members.put_status(%{
+        state: :running,
+        stage: :staff,
+        stages: %{tiers: %{created: 2}}
+      })
+
+    assert {:noreply, second_socket} =
+             LiveHandler.handle_event("sync_members", %{}, socket())
+
+    assert length(all_enqueued(worker: MemberSyncWorker)) == 1
+    assert second_socket.assigns.member_sync_status == running_status
+    assert Sync.Members.status() == running_status
+  end
+
+  test "sync_members does not overwrite progress when the worker starts before insert returns" do
+    Repatch.patch(Bonfire.Ghost, :admin_configured?, fn -> true end)
+    Repatch.patch(LiveHandler, :can_configure_instance?, fn _socket -> true end)
+    Sync.Members.clear_status()
+
+    running_status = %{
+      state: :running,
+      stage: :staff,
+      stages: %{tiers: %{created: 2}},
+      job_id: 987
+    }
+
+    Repatch.patch(Oban, :insert, fn _changeset ->
+      status = Sync.Members.put_status(running_status)
+      assert status.state == :running
+      {:ok, %Oban.Job{id: 987, args: %{}}}
+    end)
+
+    assert {:noreply, result_socket} =
+             LiveHandler.handle_event("sync_members", %{}, socket())
+
+    assert result_socket.assigns.member_sync_status == Sync.Members.status()
+    assert result_socket.assigns.member_sync_status.state == :running
+    assert result_socket.assigns.member_sync_status.stage == :staff
+  end
+
   test "sync_members does not enqueue when the user lacks instance permission" do
     Repatch.patch(Bonfire.Ghost, :admin_configured?, fn -> true end)
     Repatch.patch(LiveHandler, :can_configure_instance?, fn _socket -> false end)

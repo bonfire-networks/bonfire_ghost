@@ -395,6 +395,10 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       Repatch.patch(Ghost, :admin_client, fn -> {:ok, :ghost_client} end)
 
       Repatch.patch(AdminAPI, :list_members, fn :ghost_client, opts ->
+        # Bulk imports give many members the same created_at; ID must break the tie or
+        # Ghost repeats/skips rows where pages split that timestamp group.
+        assert Keyword.fetch!(opts, :order) == "created_at asc,id asc"
+
         case Keyword.fetch!(opts, :page) do
           1 ->
             {:ok,
@@ -532,6 +536,9 @@ defmodule Bonfire.Ghost.Sync.MembersTest do
       Repatch.patch(AdminAPI, :list_users, fn :ghost_client, opts ->
         # suspended/locked staff are excluded server-side — the filter must always be sent
         assert Keyword.fetch!(opts, :filter) == AdminAPI.signin_staff_filter()
+        # Bulk imports give many staff the same created_at; ID must break the tie or
+        # Ghost repeats/skips rows where pages split that timestamp group.
+        assert Keyword.fetch!(opts, :order) == "created_at asc,id asc"
 
         case Keyword.fetch!(opts, :page) do
           1 ->

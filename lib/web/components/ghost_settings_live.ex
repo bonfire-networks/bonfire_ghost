@@ -172,6 +172,19 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   def sync_count(status, key) when is_map(status), do: Map.get(status, key) || 0
   def sync_count(_, _), do: 0
 
+  @doc "Counters recorded for one member-backfill stage, or nil before it starts."
+  def member_stage_counts(%{stages: stages}, stage) when is_map(stages),
+    do: Map.get(stages, stage)
+
+  def member_stage_counts(_, _), do: nil
+
+  @doc "Whether this is the member-backfill stage currently being processed."
+  def member_stage_current?(%{state: state, stage: current}, stage)
+      when state in [:queued, :running],
+      do: current == stage
+
+  def member_stage_current?(_, _), do: false
+
   @doc "Capped list of per-article import errors (`%{article: label, reason: string}`)."
   def sync_errors(%{errors: errors}) when is_list(errors), do: errors
   def sync_errors(_), do: []

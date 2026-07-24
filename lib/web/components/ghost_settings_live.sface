@@ -548,7 +548,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               phx-click="Bonfire.Ghost:sync_members"
               phx-target={@myself}
               data-confirm={l(
-                "Backfill members from Ghost? This runs a background job that provisions accounts and adds existing members to their tier circles."
+                "Backfill Ghost staff and members? This runs a background job that provisions accounts and adds existing members to their tier circles."
               )}
             >
               <#Icon iconify="ph:arrows-clockwise" class="w-4 h-4" />
@@ -559,7 +559,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
           <div x-show="expanded" x-collapse x-cloak class="px-4 pb-4">
             <p class="text-sm text-muted mb-4">
               {l(
-                "Run a one-off backfill after syncing tiers. Webhooks and Ghost sign-in keep future changes in sync."
+                "The job syncs tiers, protects staff identities first, then walks members. Re-running is safe; webhooks and Ghost sign-in keep future changes in sync."
               )}
             </p>
 
@@ -572,6 +572,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 <div class="w-full">
                   <div class="font-medium">
                     {#case @member_sync_status[:state]}
+                      {#match :queued}{l("Backfill queued")}
                       {#match :done}{l("Last backfill finished")}
                       {#match :failed}{l("Last backfill FAILED at the %{stage} stage", stage: @member_sync_status[:stage])}
                       {#match _}{l("Backfill running — %{stage} stage", stage: @member_sync_status[:stage])}
@@ -579,15 +580,38 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   </div>
 
                   <ul class="mt-1 space-y-0.5">
-                    {#for stage <- [:tiers, :members, :staff]}
-                      {#if counts = @member_sync_status[:stages][stage]}
+                    {#for stage <- [:tiers, :staff, :members]}
+                      {#if stage == :tiers and member_stage_counts(@member_sync_status, stage)}
                         <li>
-                          <b>{stage}</b>: {l("%{n} provisioned", n: counts[:provisioned])}
-                          {#if counts[:skipped] > 0}· {l("%{n} skipped", n: counts[:skipped])}{/if}
-                          {#if counts[:errors_count] > 0}· {l("%{n} errors", n: counts[:errors_count])}{/if}
+                          <b>{stage}</b>:
+                          {l("%{n} created", n: member_stage_counts(@member_sync_status, stage)[:created])}
+                          · {l("%{n} updated", n: member_stage_counts(@member_sync_status, stage)[:updated])}
+                          · {l("%{n} unchanged", n: member_stage_counts(@member_sync_status, stage)[:unchanged])}
+                          {#if member_stage_counts(@member_sync_status, stage)[:archived] > 0}
+                            · {l("%{n} archived", n: member_stage_counts(@member_sync_status, stage)[:archived])}
+                          {/if}
+                          {#if member_stage_counts(@member_sync_status, stage)[:errors_count] > 0}
+                            · {l("%{n} errors", n: member_stage_counts(@member_sync_status, stage)[:errors_count])}
+                          {/if}
                         </li>
+                      {#elseif member_stage_counts(@member_sync_status, stage)}
+                        <li>
+                          <b>{stage}</b>:
+                          {#if member_stage_current?(@member_sync_status, stage)}
+                            {l("in progress — ")}
+                          {/if}
+                          {l("%{n} provisioned", n: member_stage_counts(@member_sync_status, stage)[:provisioned])}
+                          {#if member_stage_counts(@member_sync_status, stage)[:skipped] > 0}
+                            · {l("%{n} skipped", n: member_stage_counts(@member_sync_status, stage)[:skipped])}
+                          {/if}
+                          {#if member_stage_counts(@member_sync_status, stage)[:errors_count] > 0}
+                            · {l("%{n} errors", n: member_stage_counts(@member_sync_status, stage)[:errors_count])}
+                          {/if}
+                        </li>
+                      {#elseif member_stage_current?(@member_sync_status, stage)}
+                        <li><b>{stage}</b>: {l("starting…")}</li>
                       {#else}
-                        <li class="opacity-60"><b>{stage}</b>: {l("did not run")}</li>
+                        <li class="opacity-60"><b>{stage}</b>: {l("waiting")}</li>
                       {/if}
                     {/for}
                   </ul>

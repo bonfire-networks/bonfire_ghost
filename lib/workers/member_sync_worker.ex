@@ -8,7 +8,7 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
   use Oban.Worker,
     queue: :ghost_webhooks,
     max_attempts: 3,
-    unique: [period: 300, states: [:available, :scheduled, :executing, :retryable]]
+    unique: [period: :infinity, states: :incomplete]
 
   import Untangle
 
@@ -17,10 +17,7 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) when is_map(args) do
-    # The accumulated status is threaded through this function rather than rebuilt by
-    # re-reading the cache in each stage: the staff pass runs for minutes, and a
-    # read-merge-write against the shared cache across that window can lose the earlier
-    # stages (which is exactly how a completed run reported "tiers/members did not run").
+    # The accumulated status is threaded through this function rather than rebuilt by re-reading the cache in each stage: a read-merge-write across a long pass can lose earlier stages.
     status = %{
       state: :running,
       stage: :tiers,
@@ -32,37 +29,31 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
 
     Members.put_status(status)
 
+    # Staff identities are protected before the potentially large member population, closing the window in which a Ghost email change can fork an existing author.
     with {:ok, tier_summary, tiers} <- sync_tiers(),
-         status = stage_done(status, :tiers, tier_summary, :members),
-         {:ok, member_summary} <- Members.sync_all(tiers: tiers) do
-      # reported before the staff pass so a staff failure can't suppress member diagnostics
+         status = stage_done(status, :tiers, tier_summary, :staff),
+         {:ok, staff_summary} <-
+           sync_staff(on_progress: stage_progress_callback(status, :staff)),
+         status = stage_done(status, :staff, staff_summary, :members),
+         {:ok, member_summary} <-
+           Members.sync_all(
+             tiers: tiers,
+             on_progress: stage_progress_callback(status, :members)
+           ) do
+      info(
+        %{tiers: tier_summary, members: member_summary, staff: staff_summary},
+        "Ghost member backfill complete"
+      )
+
+      warn_member_errors(staff_summary)
       warn_member_errors(member_summary)
-      status = stage_done(status, :members, member_summary, :staff)
 
-      case sync_staff() do
-        {:ok, staff_summary} ->
-          info(
-            %{tiers: tier_summary, members: member_summary, staff: staff_summary},
-            "Ghost member backfill complete"
-          )
+      status
+      |> record_stage(:members, member_summary)
+      |> Map.merge(%{state: :done, finished_at: DateTime.utc_now()})
+      |> Members.put_status()
 
-          warn_member_errors(staff_summary)
-
-          status
-          |> record_stage(:staff, staff_summary)
-          |> Map.merge(%{state: :done, finished_at: DateTime.utc_now()})
-          |> Members.put_status()
-
-          :ok
-
-        {:error, reason} = e ->
-          fail_status(reason, job)
-          e
-
-        {:cancel, reason} = c ->
-          fail_status(reason, job)
-          c
-      end
+      :ok
     else
       {:error, reason} = e ->
         fail_status(reason, job)
@@ -79,13 +70,17 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
     end
   end
 
-  # Records what a finished stage did and names the stage now starting, returning the
-  # updated status (also persisted) — so a status stuck on `stage: :members` says plainly
-  # that the staff pass never ran.
+  def perform(%Oban.Job{args: args}) do
+    error(args, "MemberSyncWorker: unrecognized args shape")
+    {:cancel, :invalid_args}
+  end
+
+  # Records what a finished stage did and names the stage now starting, so the UI distinguishes completed, current, and pending stages.
   defp stage_done(status, stage, summary, next_stage) do
     status
     |> record_stage(stage, summary)
     |> Map.put(:stage, next_stage)
+    |> Map.delete(:page)
     |> Members.put_status()
   end
 
@@ -96,10 +91,18 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
     end)
   end
 
-  # Reads the last PERSISTED status (which `stage_done` kept current) rather than the
-  # in-`with` accumulator: a `with/else` clause can't see variables rebound in the chain,
-  # so the accumulator here would be stale on the exact stage that just failed. A single
-  # read on the failure path carries no race (failures are one-shot, not the long loop).
+  # Each page writes a complete snapshot from the immutable status accumulated before the stage, giving the UI a heartbeat without cache merge races.
+  defp stage_progress_callback(status, stage) do
+    fn page, summary ->
+      status
+      |> record_stage(stage, summary)
+      |> Map.put(:stage, stage)
+      |> Map.put(:page, page)
+      |> Members.put_status()
+    end
+  end
+
+  # Read the last persisted status because a `with/else` clause cannot see accumulator rebindings from the chain; this one-shot failure-path read has no long-loop merge race.
   defp fail_status(reason, job) do
     (Members.status() || %{stages: %{}})
     |> Map.merge(%{
@@ -112,14 +115,9 @@ defmodule Bonfire.Ghost.Workers.MemberSyncWorker do
     |> Members.put_status()
   end
 
-  def perform(%Oban.Job{args: args}) do
-    error(args, "MemberSyncWorker: unrecognized args shape")
-    {:cancel, :invalid_args}
-  end
-
-  # Staff (owner/admin/editor/author/contributor) are backfilled after members: Ghost emits no webhooks for them, so this pass is their only sync path besides gated login. Auth errors on /users/ are deterministic (bad or under-scoped integration key), so cancel instead of burning retries; anything else retries the whole job, which is safe because the member passes are idempotent.
-  defp sync_staff do
-    case Members.sync_all_staff([]) do
+  # Staff (owner/admin/editor/author/contributor) are backfilled before members: Ghost emits no webhooks for them, so this pass is their only sync path besides gated login, and delaying it behind a large member population leaves legacy authors exposed to email-change forks. Auth errors on /users/ are deterministic (bad or under-scoped integration key), so cancel instead of burning retries; anything else retries the whole job, which is safe because every pass is idempotent.
+  defp sync_staff(opts) do
+    case Members.sync_all_staff(opts) do
       {:error, reason} when reason in [:unauthorized, :forbidden] ->
         error(reason, "Ghost staff backfill failed with an auth error, cancelling")
         {:cancel, {:staff_sync_failed, reason}}

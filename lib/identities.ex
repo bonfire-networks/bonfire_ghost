@@ -30,20 +30,7 @@ defmodule Bonfire.Ghost.Identities do
   alias Bonfire.Me.Accounts
   alias Bonfire.Me.Users
   alias Ecto.Changeset
-
-  defmodule GhostIdentity do
-    use Ecto.Schema
-
-    @primary_key false
-    schema "bonfire_ghost_identity" do
-      belongs_to(:account, Bonfire.Data.Identity.Account, type: Needle.ULID, primary_key: true)
-      belongs_to(:user, Bonfire.Data.Identity.User, type: Needle.ULID)
-      field(:ghost_member_id, :string)
-      field(:ghost_staff_id, :string)
-      field(:ghost_email, :string)
-      timestamps()
-    end
-  end
+  alias Bonfire.Ghost.Identities.GhostIdentity
 
   @doc """
   Upserts the identity row for an account, attaching whichever of

@@ -19,13 +19,13 @@ defmodule Bonfire.Ghost.Web.AuthorIdentityE2eTest do
   use Bonfire.Ghost.ConnCase, async: false
   use Repatch.ExUnit
 
-  import Swoosh.TestAssertions
-
   alias Bonfire.Ghost
   alias Bonfire.Ghost.AdminAPI
+  alias Bonfire.Ghost.Identities
   alias Bonfire.Ghost.Sync.Members
   alias Bonfire.Me.Accounts
   alias Bonfire.Me.Users
+  alias Bonfire.Posts.Fake, as: PostsFake
 
   setup do
     # gated deployments run passwordless; mirror that so the magic-link branch runs
@@ -132,6 +132,90 @@ defmodule Bonfire.Ghost.Web.AuthorIdentityE2eTest do
     # the takeover bug: a post-change import must still attribute to the original profile
     assert {:ok, again} = import_author(staff(e2, id: "s_split"))
     assert again.id == author.id
+  end
+
+  test "sign-in repairs a changed-email empty fork created after the identity table was lost" do
+    old_email = unique_email("lost-link-before")
+    new_email = unique_email("lost-link-after")
+    old_payload = staff(old_email, id: "s_lost_link")
+    new_payload = staff(new_email, id: "s_lost_link")
+
+    assert {:ok, author} = import_author(old_payload)
+    original_account = Accounts.get_by_email(old_email)
+
+    Process.put([:bonfire_ghost, :ghost_url], "https://ghost-recovery.test")
+    post = PostsFake.fake_post!(author)
+
+    assert {:ok, _peered} =
+             Bonfire.Federate.ActivityPub.Peered.save_canonical_uri(
+               post,
+               "https://ghost-recovery.test/imported-article/"
+             )
+
+    assert {:ok, _deleted} =
+             Identities.get_by_staff_id("s_lost_link")
+             |> Ghost.repo().delete()
+
+    assert {:ok, empty_fork} = Members.provision_from_ghost_staff(new_payload)
+    assert Users.by_account!(empty_fork) == []
+    assert empty_fork.id != original_account.id
+
+    stub_ghost(new_payload)
+    resp = submit_forgot(new_email)
+    assert resp.resp_body =~ "Check your inbox"
+
+    assert Accounts.get_by_email(new_email).id == original_account.id
+    assert Identities.get_by_staff_id("s_lost_link").user_id == author.id
+
+    landed = click_login_link!()
+    assert get_session(landed, :current_user_id) == author.id
+  end
+
+  test "sign-in repairs a profileless new-email fork while the staff ID still links the original author" do
+    old_email = unique_email("linked-conflict-before")
+    new_email = unique_email("linked-conflict-after")
+    old_payload = staff(old_email, id: "s_linked_conflict")
+    new_payload = staff(new_email, id: "s_linked_conflict")
+
+    assert {:ok, author} = import_author(old_payload)
+    original_account = Accounts.get_by_email(old_email)
+
+    Process.put([:bonfire_ghost, :ghost_url], "https://ghost-linked-conflict.test")
+    post = PostsFake.fake_post!(author)
+
+    assert {:ok, _peered} =
+             Bonfire.Federate.ActivityPub.Peered.save_canonical_uri(
+               post,
+               "https://ghost-linked-conflict.test/imported-article/"
+             )
+
+    assert {:ok, _deleted} =
+             Identities.get_by_staff_id("s_linked_conflict")
+             |> Ghost.repo().delete()
+
+    assert {:ok, empty_fork} = Members.provision_from_ghost_staff(new_payload)
+    assert Users.by_account!(empty_fork) == []
+
+    assert {:ok, _deleted} =
+             Identities.get_by_staff_id("s_linked_conflict")
+             |> Ghost.repo().delete()
+
+    assert {:ok, _identity} =
+             Identities.link(original_account,
+               staff_id: "s_linked_conflict",
+               user: author,
+               ghost_email: old_email
+             )
+
+    stub_ghost(new_payload)
+    resp = submit_forgot(new_email)
+    assert resp.resp_body =~ "Check your inbox"
+
+    assert Accounts.get_by_email(new_email).id == original_account.id
+    assert Identities.get_by_staff_id("s_linked_conflict").user_id == author.id
+
+    landed = click_login_link!()
+    assert get_session(landed, :current_user_id) == author.id
   end
 
   test "case-only email variance in the Ghost payload does not fork the identity" do

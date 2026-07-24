@@ -23,7 +23,10 @@ defmodule Bonfire.Ghost.Web.GatedLoginFlowTest do
 
   alias Bonfire.Ghost
   alias Bonfire.Ghost.AdminAPI
+  alias Bonfire.Ghost.Identities
+  alias Bonfire.Ghost.Sync.Members
   alias Bonfire.Me.Accounts
+  alias Bonfire.Me.Users
 
   setup do
     # gated deployments run passwordless (GHOST_GATED_MODE sets this at startup); mirror
@@ -185,6 +188,60 @@ defmodule Bonfire.Ghost.Web.GatedLoginFlowTest do
 
     assert_email_sent(fn mail ->
       assert {_, ^email} = hd(mail.to)
+    end)
+  end
+
+  test "a fresh email change keeps an existing staff/member author profile" do
+    old_email = unique_email()
+    new_email = unique_email()
+
+    old_staff = %{
+      "id" => "ghost_staff_email_change",
+      "email" => old_email,
+      "name" => "Existing Author",
+      "slug" => "existing-author",
+      "status" => "active"
+    }
+
+    assert {:ok, author} =
+             Members.provision_from_ghost_staff(old_staff, create_user: true)
+
+    source_account = Accounts.get_by_email(old_email)
+
+    member = %{
+      "id" => "ghost_member_email_change",
+      "email" => new_email,
+      "name" => "Existing Author",
+      "tiers" => [%{"slug" => "paid", "name" => "paid"}]
+    }
+
+    changed_staff = %{old_staff | "email" => new_email}
+
+    Repatch.patch(Ghost, :admin_configured?, fn -> true end)
+    Repatch.patch(Ghost, :admin_client, fn -> {:ok, :client} end)
+
+    Repatch.patch(AdminAPI, :get_member_by_email, fn :client, ^new_email, _opts ->
+      {:ok, %{"members" => [member]}}
+    end)
+
+    Repatch.patch(AdminAPI, :get_user_by_email, fn :client, ^new_email ->
+      {:ok, %{"users" => [changed_staff]}}
+    end)
+
+    resp = submit_forgot(new_email)
+
+    assert resp.resp_body =~ "Check your inbox"
+    assert Accounts.get_by_email(new_email).id == source_account.id
+    refute Accounts.get_by_email(old_email)
+    assert Users.ids_by_account(source_account) == [author.id]
+
+    identity = Identities.get_by_staff_id("ghost_staff_email_change")
+    assert identity.account_id == source_account.id
+    assert identity.user_id == author.id
+    assert identity.ghost_member_id == "ghost_member_email_change"
+
+    assert_email_sent(fn mail ->
+      assert {_, ^new_email} = hd(mail.to)
     end)
   end
 
