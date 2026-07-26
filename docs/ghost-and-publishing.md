@@ -14,7 +14,7 @@ One row per person in `bonfire_ghost_identity` (see `Bonfire.Ghost.Identities`):
 | `user_id` | the author/attribution profile, once known |
 | `ghost_staff_id` | Ghost staff-user ID (authors/editors/admins) |
 | `ghost_member_id` | Ghost member ID (subscribers) |
-| `ghost_email` | last email seen from Ghost |
+| `ghost_email` | last Ghost email successfully reconciled with the local account |
 
 Ghost keeps staff and members as **separate entities with separate ID spaces**,
 and the same human can be both — both IDs live on the same row, so both Ghost
@@ -32,7 +32,8 @@ on their next touch.
   follow — no duplicate identity, sign-in works with the new address
   immediately. If the new address already belongs to a *different* Bonfire
   account, the change is NOT applied (logged as a warning) — merging two
-  accounts is an admin decision.
+  accounts is an admin decision. The previous `ghost_email` marker is retained,
+  so once the conflict is resolved a later sync can retry the change.
 - **Changed in Bonfire** (the person sets their own address): the link is
   ID-based, so nothing breaks — and sync **respects the local choice**: it only
   follows Ghost's email while the local one still tracks what Ghost last had
@@ -49,17 +50,9 @@ profile wins, not whichever profile happens to come first.
 
 ### Sign-in
 
-One flow for everyone (`/login/forgot-password`): local account lookup first
-(existing accounts always get their magic link, Ghost is not consulted), then
-Ghost member lookup (with the tier gate), then Ghost staff lookup (staff bypass
-the gate; only staff *suspended* in Ghost are refused). Unknown emails get the same
-neutral response — no account enumeration.
+One flow for everyone (`/login/forgot-password`): local account lookup first, then Ghost member lookup (with the tier gate). An allowed member is checked for a matching Ghost staff record before member provisioning; this matters when the same person is both, because the staff ID can reconnect a freshly changed email to the existing author before the member ID is attached to that same account. Staff bypass the tier gate; only staff *suspended* in Ghost are refused. Established accounts with profiles always get their magic link without consulting Ghost. A profileless account may invoke the provider's reconciliation hook so an empty fork can be repaired before the link is issued. Unknown emails get the same neutral response — no account enumeration.
 
-If an *active* staff record has no identity link yet and no account matches
-their email, a conservative **claim step** reconnects them to a stranded
-Ghost-provisioned account (only when the staff slug matches the account's
-single profile's username and the account carries the Ghost provisioning
-marker) instead of forking a fresh account.
+If an active staff record has no identity link yet, its identity link points to a profileless fork, or a separately-created profileless fork already holds Ghost's new email, a conservative claim step reconnects it to the stranded account. The staff slug must match the account's single profile, and the account must carry Ghost provisioning evidence or that profile must have authored an imported object from the configured Ghost site. For legacy profiles that predate both markers, an already-linked empty fork is sufficient evidence only when its own stash has the exact Ghost staff ID, kind and normalized name, the older profile has the same normalized name, and the account/email chronology matches the split. A conflicting profileless account is only quarantined when its own Ghost provisioning marker contains the same staff ID.
 
 ### The tier gate
 
@@ -74,12 +67,7 @@ webhooks, and the "Sync members" backfill alike. Refused members return
 `{:skip, :tier_not_allowed}` (the backfill counts them as `skipped`, the webhook
 job cancels rather than retries).
 
-That placement is load-bearing. Sign-in only consults Ghost for emails with **no
-local account**, so an account created anywhere else is a permanent bypass:
-until 2026-07-21 the webhook and backfill provisioned everyone, and a free Ghost
-signup therefore got a working jacobin.social login on a paid-tier-only
-instance. Never add a provisioning path that skips
-`provision_from_ghost_member/2`.
+That placement is load-bearing. Established local accounts remain outside the provisioning gate; the profileless-account reconciliation hook repairs identity links but does not create a new account. Until 2026-07-21 the webhook and backfill provisioned everyone, and a free Ghost signup therefore got a working jacobin.social login on a paid-tier-only instance. Never add a provisioning path that skips `provision_from_ghost_member/2`.
 
 Staff bypass the gate (separate Ghost entity, no tiers); `skip_tier_gate: true`
 bypasses it deliberately. A payload with no `tiers` key is resolved against the
@@ -123,9 +111,7 @@ the publication changed.
 Run once, in this order:
 
 1. Deploy (the `bonfire_ghost_identity` migration runs).
-2. Admin settings → Ghost → **"Sync members"**. The backfill walks tiers →
-   members → active staff and writes identity rows keyed on everyone's
-   *current* emails.
+2. Admin settings → Ghost → **"Sync members"**. The backfill walks tiers → active staff → members and writes identity rows keyed on everyone's *current* emails. Staff and member pagination order by both creation time and ID because bulk imports often give many records the same timestamp; removing that tie-breaker causes Ghost page boundaries to repeat some records and skip others.
 3. Only THEN change emails in Ghost (e.g. give contributor profiles their real
    addresses). The links recorded in step 2 make every change follow instead of
    fork.

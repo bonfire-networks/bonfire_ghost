@@ -377,6 +377,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
              to_circles: to_circles,
              context_id: context_id,
              mentions: [context_id],
+             auto_boost_at: published,
              post_id: post_id,
              post_attrs: %{
                id: post_id,
@@ -537,7 +538,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
     with {context_type, context} when context_type in [:topic, :group] and not is_nil(context) <-
            resolve_context(group_id, article) do
       ensure_author_can_post(author, context, group_id)
-      Bonfire.Social.Tags.maybe_auto_boost(author, context, post)
+
+      Bonfire.Social.Tags.maybe_auto_boost(author, context, post,
+        auto_boost_at: e(article, "published_at", nil)
+      )
     else
       _ -> :ok
     end

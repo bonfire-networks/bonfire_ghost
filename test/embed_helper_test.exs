@@ -512,6 +512,57 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
                by: topic,
                current_user: creator
              )
+
+      assert {:ok, boost} =
+               Bonfire.Social.Boosts.get(topic, post, skip_boundary_check: true)
+
+      boost_date = Bonfire.Common.DatesTimes.date_from_pointer(boost)
+      post_date = Bonfire.Common.DatesTimes.date_from_pointer(post)
+
+      assert DateTime.compare(boost_date, post_date) == :eq
+      assert boost.id != post.id
+    end
+
+    test "routing an existing article into a topic preserves its publication date" do
+      creator = Fake.fake_user!()
+      group = group!(creator)
+      topic = topic!(creator, group)
+
+      Process.put([:bonfire_ghost, :auto_import_as], creator.id)
+
+      assert {:ok, post} = EmbedHelper.import_article(article(), [])
+      assert {:ok, updated} = EmbedHelper.import_article(article(), group_id: topic.id)
+
+      assert updated.id == post.id
+
+      assert {:ok, boost} =
+               Bonfire.Social.Boosts.get(topic, post, skip_boundary_check: true)
+
+      assert DateTime.compare(
+               Bonfire.Common.DatesTimes.date_from_pointer(boost),
+               Bonfire.Common.DatesTimes.date_from_pointer(post)
+             ) == :eq
+    end
+
+    test "ordinary category auto-boosts still use the current time" do
+      creator = Fake.fake_user!()
+      group = group!(creator)
+      topic = topic!(creator, group)
+
+      Process.put([:bonfire_ghost, :auto_import_as], creator.id)
+
+      assert {:ok, post} = EmbedHelper.import_article(article(), [])
+      before_boost = DateTime.utc_now()
+
+      Bonfire.Social.Tags.maybe_auto_boost(creator, topic, post)
+
+      assert {:ok, boost} =
+               Bonfire.Social.Boosts.get(topic, post, skip_boundary_check: true)
+
+      boost_date = Bonfire.Common.DatesTimes.date_from_pointer(boost)
+
+      assert DateTime.compare(boost_date, before_boost) in [:eq, :gt]
+      assert DateTime.diff(DateTime.utc_now(), boost_date, :second) <= 1
     end
 
     test "explicit group_id opt overrides the post_into_group setting" do
