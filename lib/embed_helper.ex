@@ -362,8 +362,17 @@ defmodule Bonfire.Ghost.EmbedHelper do
          :ok <- ensure_author_can_post(author, context, group_id),
          %{boundary: boundary, to_circles: to_circles} <-
            article_boundary_attrs(article, context, boundary_opt),
+         # a dev-preview embed (loopback origin) keeps the imported article local-only and drops
+         # tier grants, so testing can't publish public/federated content
+         {boundary, to_circles} =
+           if(Keyword.get(opts, :restrict_to_local, false),
+             do: {"local", []},
+             else: {boundary, to_circles}
+           ),
          context_id = (context && Enums.id(context)) || nil,
-         published = e(article, "published_at", nil),
+         # the article's own publication date, else an explicit override opt (e.g. an embed's
+         # `data-published-at`), so an old article is backdated instead of surfacing as fresh
+         published = e(article, "published_at", nil) || Keyword.get(opts, :published_at),
          post_id = (published && DatesTimes.generate_ulid_if_past(published)) || nil,
          :ok <- report_import_stage(opts, :publishing_post),
          {:ok, post} <-

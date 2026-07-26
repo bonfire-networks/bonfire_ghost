@@ -96,7 +96,8 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
     case Bonfire.Ghost.Identities.get_by_account(email_account) do
       %{ghost_staff_id: staff_id} when is_binary(staff_id) ->
         case Members.provision_from_ghost_member(member, opts) do
-          {:ok, _} -> staff_result
+          {:ok, _} ->
+            staff_result
 
           other ->
             warn(other, "Could not attach the Ghost member ID to its staff account")
