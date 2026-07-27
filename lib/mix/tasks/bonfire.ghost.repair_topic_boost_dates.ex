@@ -76,7 +76,10 @@ defmodule Mix.Tasks.Bonfire.Ghost.RepairTopicBoostDates do
       encoded = TopicBoostDateRepair.encode_manifest!(manifest)
       maybe_write_manifest(opts[:manifest], encoded, opts[:force] == true)
       Mix.shell().info(encoded)
-      Mix.shell().info("Preview only: #{length(manifest["repairs"])} candidate(s), no rows changed.")
+
+      Mix.shell().info(
+        "Preview only: #{length(manifest["repairs"])} candidate(s), no rows changed."
+      )
     else
       {:error, reason} -> Mix.raise("Could not build repair preview: #{inspect(reason)}")
     end
@@ -126,8 +129,13 @@ defmodule Mix.Tasks.Bonfire.Ghost.RepairTopicBoostDates do
 
   defp required_option!(opts, key) do
     case Keyword.get(opts, key) do
-      value when is_binary(value) and value != "" -> value
-      _ -> Mix.raise("Missing required option --#{key |> Atom.to_string() |> String.replace("_", "-")}")
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        Mix.raise(
+          "Missing required option --#{key |> Atom.to_string() |> String.replace("_", "-")}"
+        )
     end
   end
 end

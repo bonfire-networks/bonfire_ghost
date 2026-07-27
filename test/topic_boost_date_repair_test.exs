@@ -70,7 +70,9 @@ defmodule Bonfire.Ghost.TopicBoostDateRepairTest do
     [repair] = manifest["repairs"]
 
     assert {:ok, 1} = TopicBoostDateRepair.apply(manifest)
-    assert {:ok, repaired_boost} = Boosts.get(context.topic, context.post, skip_boundary_check: true)
+
+    assert {:ok, repaired_boost} =
+             Boosts.get(context.topic, context.post, skip_boundary_check: true)
 
     assert repaired_boost.id == repair["new_boost_id"]
     assert DateTime.compare(date(repaired_boost.id), date(context.post.id)) == :eq
