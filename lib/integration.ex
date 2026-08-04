@@ -58,12 +58,14 @@ defmodule Bonfire.Ghost do
   end
 
   @doc """
-  The user id that imported articles (and on-demand embed thread anchors) are attributed
-  to, or nil.
+  The user id that imported articles (and guest-created generic embed thread anchors)
+  are attributed to, or nil.
 
   This is the instance's "post on our behalf" identity. It is the *only* trusted source
-  for an import's author — embeds may not supply one (see `Bonfire.Ghost.EmbedHelper`'s
-  `@untrusted_opts`). Same `Config.get` caveat as `post_into_group/0`.
+  for an import's author — an embedding page may not supply one (the comments embed
+  ignores author/audience params, and never creates Ghost articles at all — see
+  `Bonfire.Ghost.EmbedHelper.get_post_for_article/2`). Same `Config.get` caveat as
+  `post_into_group/0`.
   """
   def auto_import_as do
     case Config.get([:bonfire_ghost, :auto_import_as], nil) do

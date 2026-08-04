@@ -17,77 +17,22 @@ defmodule Bonfire.Ghost.EmbedHelper do
   alias Bonfire.Boundaries.Grants
 
   @doc """
-  Finds or creates a Bonfire Post for a Ghost article, on demand from the comments embed.
+  Finds an already-imported Bonfire post for a Ghost article without creating or updating anything.
 
-  `url` is the article's page URL as reported by the embedding page — used only as a
-  cheap dedup hint. `slug_or_id` is the Ghost canonical slug or `"id:<ghost_id>"`.
-
-  Returns `{:ok, post}` on success, or `{:error, reason}` otherwise.
-
-  ## Untrusted input
-
-  This is reachable **unauthenticated** by anyone (the embed LiveView is loaded on
-  third-party pages, and its URL params are whatever the visitor sends). So it takes
-  no caller opts that could choose the post's author, audience or destination — those
-  come from instance settings (`auto_import_as`, `post_into_group`) and the article's
-  own Ghost `visibility`. See `@untrusted_opts`; anything else lands via `import_article/2`,
-  which is only called by trusted server-side paths (webhook worker, operator backfill).
+  The embedding page's URL is checked first. When that does not match and Ghost is configured, the article is fetched only to resolve its canonical URL before looking up the existing import. Article creation belongs to the webhook importer or the explicit historical backfill, never to page navigation.
   """
-  def get_or_create_post_for_article(slug_or_id, url, opts \\ []) do
-    opts = drop_untrusted_opts(opts)
-
-    # fast path, to skip the Ghost API round-trip. A forged `url` can only surface an existing
-    # thread, which the embed can already do by id.
-    case url && Peered.get_by_uri(url) do
+  def get_post_for_article(slug_or_id, url) do
+    case find_imported_post(url) do
       {:ok, %{id: existing_id} = post} ->
         info(existing_id, "found an existing post")
         {:ok, post}
 
-      other ->
-        info(other, "did not find an existing post, fetch from source")
-
+      _ ->
         with true <- Ghost.configured?() || {:error, :ghost_not_configured},
              {:ok, article} <- fetch_article(slug_or_id) do
-          # dedup/store against the URL *Ghost* reports, never the caller's: a varying query
-          # string would otherwise mint a duplicate post per variant and poison the canonical URI
-          case article_url(article) do
-            canonical when is_binary(canonical) ->
-              case Peered.get_by_uri(canonical) do
-                {:ok, %{id: existing_id} = post} ->
-                  info(existing_id, "found an existing post by canonical URL")
-                  {:ok, post}
-
-                _ ->
-                  create_post_from_article(article, canonical, opts)
-              end
-
-            _ ->
-              create_post_from_article(article, nil, opts)
-          end
+          find_imported_post(article)
         end
     end
-  end
-
-  # Opts an embed visitor must never choose: `:creator`/`:current_user` forge the author,
-  # `:boundary` overrides the paywall mapping in `article_boundary_attrs/3`, `:group_id` posts
-  # into an arbitrary group (force-joining the author), `:require_topic` bypasses topic-gating.
-  @untrusted_opts [:creator, :boundary, :group_id, :require_topic, :current_user]
-
-  defp drop_untrusted_opts(opts) do
-    {untrusted, rest} = Keyword.split(opts, @untrusted_opts)
-
-    case Enum.reject(untrusted, &match?({_, nil}, &1)) do
-      [] ->
-        :ok
-
-      ignored ->
-        warn(
-          Keyword.keys(ignored),
-          "Ignoring embed-supplied opts — author, audience and destination come from instance settings (Ghost settings: import author / post into group)"
-        )
-    end
-
-    rest
   end
 
   @doc """
@@ -97,7 +42,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   Upserts by canonical URI: if a post already exists for `article["url"]` it is
   updated (and un-hidden, in case it was previously unpublished); otherwise a
   new post is created. Author is resolved via the shared fallback chain (see
-  `get_or_create_post_for_article/3`).
+  `resolve_author/2`).
 
   Returns `{:ok, post}` on success, `{:ok, :filtered_out}` when a configured Ghost tag filter intentionally skips the article, or `{:error, reason}` otherwise.
 
@@ -262,10 +207,6 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
   defp slug_url(_), do: nil
 
-  defp article_url(url) when is_binary(url), do: url
-  defp article_url(article) when is_map(article), do: e(article, "url", nil)
-  defp article_url(_), do: nil
-
   # `:hide` blocks aren't detectable via `Blocks.is_blocked?` (that checks the
   # silence/ghost circles, not object-discovery grants), so just attempt to
   # reverse it — `unblock(:hide)` is a no-op when nothing was hidden.
@@ -362,16 +303,9 @@ defmodule Bonfire.Ghost.EmbedHelper do
          :ok <- ensure_author_can_post(author, context, group_id),
          %{boundary: boundary, to_circles: to_circles} <-
            article_boundary_attrs(article, context, boundary_opt),
-         # a dev-preview embed (loopback origin) keeps the imported article local-only and drops
-         # tier grants, so testing can't publish public/federated content
-         {boundary, to_circles} =
-           if(Keyword.get(opts, :restrict_to_local, false),
-             do: {"local", []},
-             else: {boundary, to_circles}
-           ),
          context_id = (context && Enums.id(context)) || nil,
-         # the article's own publication date, else an explicit override opt (e.g. an embed's
-         # `data-published-at`), so an old article is backdated instead of surfacing as fresh
+         # the article's own publication date, else an explicit `:published_at` override opt,
+         # so an old article is backdated instead of surfacing as fresh
          published = e(article, "published_at", nil) || Keyword.get(opts, :published_at),
          post_id = (published && DatesTimes.generate_ulid_if_past(published)) || nil,
          :ok <- report_import_stage(opts, :publishing_post),
@@ -749,7 +683,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
   end
 
   # Returns a user struct, an ID, or nil. `opts[:creator]`/`opts[:current_user]` are honoured for
-  # TRUSTED callers only (`import_article/2`); the embed entrypoint strips them (`@untrusted_opts`).
+  # TRUSTED callers only (`import_article/2` — webhook worker, operator backfill); the public
+  # embed never creates posts at all (`get_post_for_article/2` is read-only).
   defp resolve_author(article, opts) do
     resolve_ghost_author(article) || opts[:creator] || configured_default_author() ||
       current_user_or_id(opts)
@@ -772,9 +707,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
   # `Bonfire.Posts.publish`/`PostContents.edit` as the author.
   defp configured_default_author, do: Ghost.auto_import_as()
 
-  # Instance-wide group/topic that webhook auto-import and embeds post into. Trusted callers
-  # (`import_article/2`) may still override it with a `:group_id` opt; an embed may NOT — see
-  # `@untrusted_opts`.
+  # Instance-wide group/topic that webhook auto-import and the backfill post into. Trusted
+  # callers (`import_article/2`) may override it with a `:group_id` opt.
   defp configured_default_group, do: Ghost.post_into_group()
 
   defp configured_auto_import_tag do

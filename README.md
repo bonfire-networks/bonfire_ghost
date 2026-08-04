@@ -56,11 +56,18 @@ Add this script tag to your Ghost theme's `post.hbs`:
 
 - `data-canonical-slug` — Ghost post slug (deduplicates via URL; `data-canonical-id` for Ghost ID)
 
-### Who a created thread belongs to, and where it goes
+Loading the embed is **read-only**: it displays the thread of an article already imported by the
+webhook or the historical backfill, and never imports the article itself. Make sure your blog's
+origin is listed in the instance's `IFRAME_ALLOWED_ORIGINS` env var — it is required for the
+iframe to render at all (CSP `frame-ancestors`), and it is also what authorises a guest-loaded
+*generic* (non-Ghost, `data-media-uri`-only) embed to create a bare thread anchor on first visit.
+
+### Who an imported article belongs to, and where it goes
 
 The embed runs on your blog, so **anyone** can craft its iframe URL. It therefore accepts no
-attribute that chooses the post's author, audience or destination — those are decided by the
-instance, in **Ghost settings**:
+attribute that chooses a post's author, audience or destination — those are decided by the
+instance, in **Ghost settings**, and only apply through the trusted import paths (webhook and
+backfill):
 
 | Setting | Replaces the old attribute | What it does |
 |---|---|---|
