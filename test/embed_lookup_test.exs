@@ -28,6 +28,7 @@ defmodule Bonfire.Ghost.EmbedLookupTest do
   defp stub_ghost! do
     Repatch.patch(Ghost, :configured?, fn -> true end)
     Repatch.patch(Ghost, :client, fn -> {:ok, :client} end)
+
     Repatch.patch(API, :get_post_by_slug, fn :client, @slug ->
       {:ok, %{"posts" => [article()]}}
     end)
