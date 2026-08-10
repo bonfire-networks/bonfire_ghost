@@ -690,6 +690,77 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
              )
     end
 
+    test "checks every page before treating a normalized topic name as unique" do
+      group = %{id: Needle.UID.generate(Bonfire.Classify.Category)}
+
+      topic = %{
+        id: Needle.UID.generate(Bonfire.Classify.Category),
+        name: "Gesellschaft"
+      }
+
+      Repatch.patch(Bonfire.Classify.Categories, :one, [mode: :shared], fn _filters, _opts ->
+        {:error, :not_found}
+      end)
+
+      Repatch.patch(Bonfire.Classify.Categories, :list, [mode: :shared], fn _filters, opts ->
+        case Keyword.get(opts, :after) do
+          nil ->
+            %{
+              edges: [],
+              page_info: %{has_next_page: true, end_cursor: "next-topic-page"}
+            }
+
+          "next-topic-page" ->
+            %{
+              edges: [topic],
+              page_info: %{has_next_page: false, end_cursor: nil}
+            }
+        end
+      end)
+
+      assert {:ok, ^topic} =
+               EmbedHelper.find_topic_for_article(group, %{
+                 "primary_tag" => %{"slug" => "gesellschaft"}
+               })
+    end
+
+    test "does not treat a first-page name match as unique when a later page also matches" do
+      group = %{id: Needle.UID.generate(Bonfire.Classify.Category)}
+
+      topics =
+        for _ <- 1..2 do
+          %{
+            id: Needle.UID.generate(Bonfire.Classify.Category),
+            name: "Gesellschaft"
+          }
+        end
+
+      Repatch.patch(Bonfire.Classify.Categories, :one, [mode: :shared], fn _filters, _opts ->
+        {:error, :not_found}
+      end)
+
+      Repatch.patch(Bonfire.Classify.Categories, :list, [mode: :shared], fn _filters, opts ->
+        case Keyword.get(opts, :after) do
+          nil ->
+            %{
+              edges: [Enum.at(topics, 0)],
+              page_info: %{has_next_page: true, end_cursor: "duplicate-topic-page"}
+            }
+
+          "duplicate-topic-page" ->
+            %{
+              edges: [Enum.at(topics, 1)],
+              page_info: %{has_next_page: false, end_cursor: nil}
+            }
+        end
+      end)
+
+      assert {:error, :not_found} =
+               EmbedHelper.find_topic_for_article(group, %{
+                 "primary_tag" => %{"slug" => "gesellschaft"}
+               })
+    end
+
     test "re-sync routes the existing article into its named topic without losing comments",
          %{creator: creator, group: group} do
       Fake.fake_user!(%{}, %{username: "gesellschaft"})

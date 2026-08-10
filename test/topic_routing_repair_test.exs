@@ -116,7 +116,7 @@ defmodule Bonfire.Ghost.TopicRoutingRepairTest do
         :ok
     end)
 
-    assert {:ok, applied_manifest} = TopicRoutingRepair.apply(manifest)
+    assert {:ok, applied_manifest} = TopicRoutingRepair.apply(manifest, articles: [tagged])
     assert applied_manifest["summary"] == %{"already_present" => 0, "created" => 1}
     assert [%{"boost_id" => boost_id}] = applied_manifest["applied_repairs"]
 
@@ -168,13 +168,17 @@ defmodule Bonfire.Ghost.TopicRoutingRepairTest do
     assert {:ok, manifest} = preview(group, [tagged_first, tagged_second])
 
     assert {:ok, pilot_manifest} =
-             TopicRoutingRepair.apply(manifest, article_url: tagged_first["url"])
+             TopicRoutingRepair.apply(manifest,
+               article_url: tagged_first["url"],
+               articles: [tagged_first, tagged_second]
+             )
 
     assert pilot_manifest["summary"] == %{"already_present" => 0, "created" => 1}
     assert {:ok, _} = Boosts.get(topic, first_post, skip_boundary_check: true)
     assert {:error, _} = Boosts.get(topic, second_post, skip_boundary_check: true)
 
-    assert {:ok, remainder_manifest} = TopicRoutingRepair.apply(manifest)
+    assert {:ok, remainder_manifest} =
+             TopicRoutingRepair.apply(manifest, articles: [tagged_first, tagged_second])
     assert remainder_manifest["summary"] == %{"already_present" => 1, "created" => 1}
     assert {:ok, _} = Boosts.get(topic, second_post, skip_boundary_check: true)
 
@@ -229,9 +233,24 @@ defmodule Bonfire.Ghost.TopicRoutingRepairTest do
     other_topic_id = other_topic.id
 
     assert {:error, {:topic_does_not_match_primary_tag, ^other_topic_id}} =
-             TopicRoutingRepair.apply(tampered_manifest)
+             TopicRoutingRepair.apply(tampered_manifest, articles: [tagged])
 
     assert {:error, _} = Boosts.get(other_topic, post, skip_boundary_check: true)
+  end
+
+  test "apply rejects an article whose primary Ghost tag changed after preview",
+       %{group: group, topic: topic} do
+    tagged = article("changed-primary-tag", "gesellschaft")
+    changed = article("changed-primary-tag", "politik")
+    assert {:ok, post} = EmbedHelper.import_article(article("changed-primary-tag"), [])
+    assert {:ok, manifest} = preview(group, [tagged])
+
+    assert {:error,
+            {:primary_tag_changed, "https://blog.test/changed-primary-tag/", "gesellschaft",
+             "politik"}} =
+             TopicRoutingRepair.apply(manifest, articles: [changed])
+
+    assert {:error, _} = Boosts.get(topic, post, skip_boundary_check: true)
   end
 
   test "preview fetches every page of published Ghost articles", %{group: group} do
@@ -363,6 +382,15 @@ defmodule Bonfire.Ghost.TopicRoutingRepairTest do
     applied_path = Path.join(directory, "applied.json")
     File.write!(preview_path, TopicRoutingRepair.encode_manifest!(preview_manifest))
 
+    patch_admin_articles(%{
+      1 =>
+        {:ok,
+         %{
+           "posts" => [tagged],
+           "meta" => %{"pagination" => %{"next" => nil}}
+         }}
+    })
+
     assert :ok =
              @repair_task.run([
                "--manifest",
@@ -391,6 +419,7 @@ defmodule Bonfire.Ghost.TopicRoutingRepairTest do
 
     assert {:error, {:before_commit_failed, :disk_full}} =
              TopicRoutingRepair.apply(preview_manifest,
+               articles: [tagged],
                before_commit: fn _applied_manifest -> {:error, :disk_full} end
              )
 

@@ -660,25 +660,51 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp resolve_topic_by_name_in_group(group, slug) do
     normalized_slug = Text.slug(slug)
 
-    matches =
-      Bonfire.Classify.Categories.list(
-        [:default, parent_category: Enums.id(group), type: :topic],
-        skip_boundary_check: true,
-        limit: 1_000
-      )
-      |> e(:edges, [])
-      |> Enum.filter(fn topic ->
-        case e(topic, :name, nil) do
-          name when is_binary(name) -> Text.slug(name) == normalized_slug
-          _ -> false
-        end
-      end)
+    matches = find_topic_name_matches(group, normalized_slug)
 
     case matches do
       [topic] -> {:topic, topic}
       _ -> nil
     end
   end
+
+  defp find_topic_name_matches(group, normalized_slug, after_cursor \\ nil, matches \\ []) do
+    opts =
+      [skip_boundary_check: true, limit: 500]
+      |> maybe_put_after_cursor(after_cursor)
+
+    page =
+      Bonfire.Classify.Categories.list(
+        [:default, parent_category: Enums.id(group), type: :topic],
+        opts
+      )
+
+    matches =
+      page
+      |> e(:edges, [])
+      |> Enum.reduce(matches, fn topic, matches ->
+        case e(topic, :name, nil) do
+          name when is_binary(name) and length(matches) < 2 ->
+            if Text.slug(name) == normalized_slug, do: [topic | matches], else: matches
+
+          _ ->
+            matches
+        end
+      end)
+
+    next_cursor = e(page, :page_info, :end_cursor, nil)
+    has_next_page? = e(page, :page_info, :has_next_page, false)
+
+    if length(matches) < 2 and has_next_page? and is_binary(next_cursor) and
+         next_cursor != after_cursor do
+      find_topic_name_matches(group, normalized_slug, next_cursor, matches)
+    else
+      matches
+    end
+  end
+
+  defp maybe_put_after_cursor(opts, nil), do: opts
+  defp maybe_put_after_cursor(opts, cursor), do: Keyword.put(opts, :after, cursor)
 
   defp topic?(category) do
     e(category, :type, nil) in [:topic, "topic"]

@@ -28,7 +28,7 @@ defmodule Bonfire.Ghost.TopicRoutingRepair do
   """
   def preview(opts) when is_list(opts) do
     with {:ok, scope} <- validate_scope(opts),
-         {:ok, articles} <- articles_for_preview(opts) do
+         {:ok, articles} <- articles_snapshot(opts) do
       {repairs, skipped} =
         articles
         |> Enum.reduce({[], []}, fn article, {repairs, skipped} ->
@@ -59,16 +59,18 @@ defmodule Bonfire.Ghost.TopicRoutingRepair do
   @doc """
   Applies a preview manifest after revalidating every selected article and topic.
 
-  Pass `:article_url` to perform a one-article pilot. The returned applied manifest contains only boosts created by this invocation and is the rollback record. A `:before_commit` function can persist that record inside the transaction; returning `{:error, reason}` rolls back every placement.
+  Pass `:article_url` to perform a one-article pilot. Current published articles are fetched again from Ghost before any database transaction; pass `:articles` only when supplying an explicit current snapshot. The returned applied manifest contains only boosts created by this invocation and is the rollback record. A `:before_commit` function can persist that record inside the transaction; returning `{:error, reason}` rolls back every placement.
   """
   def apply(manifest, opts \\ []) when is_map(manifest) and is_list(opts) do
     with {:ok, scope, repairs} <- validate_preview_manifest(manifest),
-         {:ok, selected_repairs} <- select_repairs(repairs, Keyword.get(opts, :article_url)) do
+         {:ok, selected_repairs} <- select_repairs(repairs, Keyword.get(opts, :article_url)),
+         {:ok, current_articles} <- articles_snapshot(opts),
+         {:ok, current_articles_by_uri} <- index_current_articles(current_articles) do
       Repo.transaction(fn ->
         result =
           selected_repairs
           |> Enum.reduce(%{applied: [], already_present: 0}, fn repair, result ->
-            case apply_repair(scope, repair) do
+            case apply_repair(scope, repair, current_articles_by_uri) do
               {:created, boost_id} ->
                 %{result | applied: [Map.put(repair, "boost_id", boost_id) | result.applied]}
 
@@ -326,9 +328,10 @@ defmodule Bonfire.Ghost.TopicRoutingRepair do
     Threads.count_replies(post_id)
   end
 
-  defp apply_repair(scope, repair) do
+  defp apply_repair(scope, repair, current_articles_by_uri) do
     with {:ok, topic} <- load_scoped_topic(scope.group_id, repair["topic_id"]),
-         :ok <- validate_topic_match(scope, repair, topic),
+         {:ok, current_article} <- load_current_article(current_articles_by_uri, repair),
+         :ok <- validate_topic_match(scope, repair, topic, current_article),
          {:ok, post} <- load_imported_post(repair["canonical_uri"], repair["article_id"]) do
       case Boosts.get(topic, post, skip_boundary_check: true) do
         {:ok, _boost} ->
@@ -337,7 +340,7 @@ defmodule Bonfire.Ghost.TopicRoutingRepair do
         _ ->
           boost_opts =
             [skip_federation: true, skip_live_push: true, notify_creator: false]
-            |> maybe_put_pointer_id(repair["published_at"])
+            |> maybe_put_pointer_id(current_article["published_at"])
 
           case Boosts.maybe_boost(topic, post, boost_opts) do
             {:ok, boost} ->
@@ -353,10 +356,20 @@ defmodule Bonfire.Ghost.TopicRoutingRepair do
     end
   end
 
-  defp validate_topic_match(scope, repair, topic) do
-    article = %{"primary_tag" => %{"slug" => repair["primary_tag_slug"]}}
+  defp validate_topic_match(scope, repair, topic, current_article) do
+    current_primary_tag_slug = get_in(current_article, ["primary_tag", "slug"])
 
-    case EmbedHelper.find_topic_for_article(scope.group, article) do
+    with true <-
+           current_primary_tag_slug == repair["primary_tag_slug"] ||
+             {:error,
+              {:primary_tag_changed, repair["canonical_uri"], repair["primary_tag_slug"],
+               current_primary_tag_slug}} do
+      validate_current_topic_match(scope, repair, topic, current_article)
+    end
+  end
+
+  defp validate_current_topic_match(scope, repair, topic, current_article) do
+    case EmbedHelper.find_topic_for_article(scope.group, current_article) do
       {:ok, %{id: resolved_topic_id} = resolved_topic} ->
         cond do
           resolved_topic_id != topic.id ->
@@ -377,9 +390,7 @@ defmodule Bonfire.Ghost.TopicRoutingRepair do
   defp rollback_repair(scope, repair) do
     with {:ok, topic} <- load_scoped_topic(scope.group_id, repair["topic_id"]),
          {:ok, post} <- load_imported_post(repair["canonical_uri"], repair["article_id"]),
-         {:ok, boost} <- Boosts.get(topic, post, skip_boundary_check: true),
-         true <- boost.id == repair["boost_id"] || {:error, {:boost_changed, boost.id}},
-         {:ok, _} <- Boosts.unboost(topic, post) do
+         {:ok, _} <- Boosts.unboost_by_id(repair["boost_id"], topic, post) do
       :ok
     else
       {:error, reason} -> {:error, reason}
@@ -423,11 +434,35 @@ defmodule Bonfire.Ghost.TopicRoutingRepair do
     end
   end
 
-  defp articles_for_preview(opts) do
+  defp articles_snapshot(opts) do
     case Keyword.get(opts, :articles) do
       articles when is_list(articles) -> {:ok, articles}
       nil -> fetch_published_articles()
       invalid -> {:error, {:invalid_articles, invalid}}
+    end
+  end
+
+  defp index_current_articles(articles) do
+    articles
+    |> Enum.reduce_while({:ok, %{}}, fn article, {:ok, indexed} ->
+      case article["url"] do
+        canonical_uri when is_binary(canonical_uri) and canonical_uri != "" ->
+          if Map.has_key?(indexed, canonical_uri) do
+            {:halt, {:error, {:duplicate_current_ghost_article, canonical_uri}}}
+          else
+            {:cont, {:ok, Map.put(indexed, canonical_uri, article)}}
+          end
+
+        _ ->
+          {:halt, {:error, :invalid_current_ghost_article}}
+      end
+    end)
+  end
+
+  defp load_current_article(current_articles_by_uri, repair) do
+    case Map.fetch(current_articles_by_uri, repair["canonical_uri"]) do
+      {:ok, article} -> {:ok, article}
+      :error -> {:error, {:current_ghost_article_not_found, repair["canonical_uri"]}}
     end
   end
 
