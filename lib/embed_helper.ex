@@ -5,6 +5,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   alias Bonfire.Common.Enums
   alias Bonfire.Common.DatesTimes
   alias Bonfire.Common.Settings
+  alias Bonfire.Common.Text
   require Bonfire.Common.Settings
   import Bonfire.Common.Utils
   import Untangle
@@ -630,15 +631,51 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
+  @doc """
+  Finds the unique child topic whose exact username or normalized display name matches an article's primary Ghost tag.
+
+  The supplied group must already be loaded. Returns `{:error, :not_found}` when the article has no primary tag, no child topic matches, or multiple topic names normalize to the same slug.
+  """
+  def find_topic_for_article(group, article) when is_map(group) and is_map(article) do
+    case resolve_topic_in_group(group, article) do
+      {:topic, topic} -> {:ok, topic}
+      _ -> {:error, :not_found}
+    end
+  end
+
   defp resolve_topic_in_group(group, article) do
-    with slug when is_binary(slug) <- e(article, "primary_tag", "slug", nil),
-         {:ok, topic} <-
-           Bonfire.Classify.Categories.one(
-             [username: slug, parent_category: Enums.id(group)],
+    with slug when is_binary(slug) <- e(article, "primary_tag", "slug", nil) do
+      case Bonfire.Classify.Categories.one(
+             [username: slug, parent_category: Enums.id(group), type: :topic],
              skip_boundary_check: true
            ) do
-      {:topic, topic}
+        {:ok, topic} -> {:topic, topic}
+        _ -> resolve_topic_by_name_in_group(group, slug)
+      end
     else
+      _ -> nil
+    end
+  end
+
+  defp resolve_topic_by_name_in_group(group, slug) do
+    normalized_slug = Text.slug(slug)
+
+    matches =
+      Bonfire.Classify.Categories.list(
+        [:default, parent_category: Enums.id(group), type: :topic],
+        skip_boundary_check: true,
+        limit: 1_000
+      )
+      |> e(:edges, [])
+      |> Enum.filter(fn topic ->
+        case e(topic, :name, nil) do
+          name when is_binary(name) -> Text.slug(name) == normalized_slug
+          _ -> false
+        end
+      end)
+
+    case matches do
+      [topic] -> {:topic, topic}
       _ -> nil
     end
   end

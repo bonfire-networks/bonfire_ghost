@@ -667,6 +667,92 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
              )
     end
 
+    test "matches the primary Ghost tag to a topic name when its global username is suffixed",
+         %{creator: creator, group: group} do
+      Fake.fake_user!(%{}, %{username: "gesellschaft"})
+
+      topic =
+        Bonfire.Classify.Simulate.fake_category!(creator, group, %{
+          type: :topic,
+          name: "Gesellschaft"
+        })
+
+      Process.put([:bonfire_ghost, :auto_import_as], creator.id)
+
+      tagged = Map.put(article(), "primary_tag", %{"slug" => "gesellschaft"})
+
+      assert topic.character.username != "gesellschaft"
+      assert {:ok, post} = EmbedHelper.import_article(tagged, [])
+
+      assert Bonfire.Social.FeedLoader.feed_contains?(:user_activities, post,
+               by: topic,
+               current_user: creator
+             )
+    end
+
+    test "re-sync routes the existing article into its named topic without losing comments",
+         %{creator: creator, group: group} do
+      Fake.fake_user!(%{}, %{username: "gesellschaft"})
+
+      topic =
+        Bonfire.Classify.Simulate.fake_category!(creator, group, %{
+          type: :topic,
+          name: "Gesellschaft"
+        })
+
+      commenter = Fake.fake_user!()
+      Process.put([:bonfire_ghost, :auto_import_as], creator.id)
+
+      assert {:ok, post} = EmbedHelper.import_article(article(), [])
+
+      assert {:ok, comment} =
+               Bonfire.Posts.publish(
+                 current_user: commenter,
+                 post_attrs: %{
+                   post_content: %{html_body: "A comment that must survive the re-sync"},
+                   reply_to_id: post.id
+                 },
+                 boundary: "public"
+               )
+
+      tagged = Map.put(article(), "primary_tag", %{"slug" => "gesellschaft"})
+
+      assert {:ok, updated} = EmbedHelper.import_article(tagged, [])
+      assert updated.id == post.id
+
+      assert Bonfire.Social.FeedLoader.feed_contains?(:user_activities, updated,
+               by: topic,
+               current_user: creator
+             )
+
+      %{edges: replies} =
+        Bonfire.Social.Threads.list_replies(updated.id,
+          current_user: commenter,
+          total_replies_count: 1
+        )
+
+      assert Enum.any?(replies, &(&1.id == comment.id))
+    end
+
+    test "does not guess when multiple topic names match the primary Ghost tag",
+         %{creator: creator, group: group} do
+      Fake.fake_user!(%{}, %{username: "gesellschaft"})
+
+      for _ <- 1..2 do
+        Bonfire.Classify.Simulate.fake_category!(creator, group, %{
+          type: :topic,
+          name: "Gesellschaft"
+        })
+      end
+
+      Process.put([:bonfire_ghost, :auto_import_as], creator.id)
+      Process.put([:bonfire_ghost, :require_topic], true)
+
+      tagged = Map.put(article(), "primary_tag", %{"slug" => "gesellschaft"})
+
+      assert {:error, :topic_required} = EmbedHelper.import_article(tagged, [])
+    end
+
     test "without require_topic, the same article is imported into the group", %{
       creator: creator,
       group: group
