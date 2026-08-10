@@ -179,6 +179,7 @@ defmodule Bonfire.Ghost.TopicRoutingRepairTest do
 
     assert {:ok, remainder_manifest} =
              TopicRoutingRepair.apply(manifest, articles: [tagged_first, tagged_second])
+
     assert remainder_manifest["summary"] == %{"already_present" => 1, "created" => 1}
     assert {:ok, _} = Boosts.get(topic, second_post, skip_boundary_check: true)
 
