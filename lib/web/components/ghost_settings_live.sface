@@ -283,9 +283,16 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                       )}</span>
                   </div>
                   <div class="text-muted tabular-nums">
-                    {l("%{count} imported", count: sync_count(@article_sync_status, :synced))}
-                    · {l("%{count} skipped by tag filter", count: sync_count(@article_sync_status, :filtered))}
-                    · {l("%{count} failed", count: sync_count(@article_sync_status, :errors_count))}
+                    {lp("%{count} imported", "%{count} imported", sync_count(@article_sync_status, :synced),
+                      count: sync_count(@article_sync_status, :synced)
+                    )}
+                    · {lp(
+                      "%{count} skipped by tag filter",
+                      "%{count} skipped by tag filter",
+                      sync_count(@article_sync_status, :filtered), count: sync_count(@article_sync_status, :filtered))}
+                    · {lp("%{count} failed", "%{count} failed", sync_count(@article_sync_status, :errors_count),
+                      count: sync_count(@article_sync_status, :errors_count)
+                    )}
                   </div>
                   {#if @article_sync_status[:current]}
                     <div class="text-muted break-all">
@@ -323,9 +330,16 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                     <span>{l("Import finished %{date}", date: format_time_ago(@article_sync_status[:finished_at]))}</span>
                   </div>
                   <div class="text-muted tabular-nums">
-                    {l("%{count} imported", count: sync_count(@article_sync_status, :synced))}
-                    · {l("%{count} skipped by tag filter", count: sync_count(@article_sync_status, :filtered))}
-                    · {l("%{count} failed", count: sync_count(@article_sync_status, :errors_count))}
+                    {lp("%{count} imported", "%{count} imported", sync_count(@article_sync_status, :synced),
+                      count: sync_count(@article_sync_status, :synced)
+                    )}
+                    · {lp(
+                      "%{count} skipped by tag filter",
+                      "%{count} skipped by tag filter",
+                      sync_count(@article_sync_status, :filtered), count: sync_count(@article_sync_status, :filtered))}
+                    · {lp("%{count} failed", "%{count} failed", sync_count(@article_sync_status, :errors_count),
+                      count: sync_count(@article_sync_status, :errors_count)
+                    )}
                   </div>
                 {#elseif sync_state(@article_sync_status) == :failed}
                   <div class="flex items-center gap-2 text-error">
@@ -336,16 +350,26 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   </div>
                   <div class="text-muted tabular-nums">
                     {l("Progress before the failure:")}
-                    {l("%{count} imported", count: sync_count(@article_sync_status, :synced))}
-                    · {l("%{count} skipped by tag filter", count: sync_count(@article_sync_status, :filtered))}
-                    · {l("%{count} failed", count: sync_count(@article_sync_status, :errors_count))}
+                    {lp("%{count} imported", "%{count} imported", sync_count(@article_sync_status, :synced),
+                      count: sync_count(@article_sync_status, :synced)
+                    )}
+                    · {lp(
+                      "%{count} skipped by tag filter",
+                      "%{count} skipped by tag filter",
+                      sync_count(@article_sync_status, :filtered), count: sync_count(@article_sync_status, :filtered))}
+                    · {lp("%{count} failed", "%{count} failed", sync_count(@article_sync_status, :errors_count),
+                      count: sync_count(@article_sync_status, :errors_count)
+                    )}
                   </div>
                 {/if}
 
                 {#if sync_errors(@article_sync_status) != []}
                   <details>
                     <summary class="cursor-pointer text-warning">
-                      {l("%{count} article(s) could not be imported — show details",
+                      {lp(
+                        "%{count} article could not be imported — show details",
+                        "%{count} articles could not be imported — show details",
+                        sync_count(@article_sync_status, :errors_count),
                         count: sync_count(@article_sync_status, :errors_count)
                       )}
                     </summary>
@@ -357,7 +381,10 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                         </li>
                       {/for}
                       {#if sync_count(@article_sync_status, :errors_count) > length(sync_errors(@article_sync_status))}
-                        <li class="text-muted">{l("…the %{count} most recent error details are shown here.",
+                        <li class="text-muted">{lp(
+                            "…the %{count} most recent error detail is shown here.",
+                            "…the %{count} most recent error details are shown here.",
+                            length(sync_errors(@article_sync_status)),
                             count: length(sync_errors(@article_sync_status))
                           )}</li>
                       {/if}
@@ -441,8 +468,10 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
             <div class="flex items-center gap-3">
               {#if @last_sync}
                 <span class="text-xs text-muted">
-                  {l("%{n} new", n: @last_sync.summary.created)},
-                  {l("%{n} updated", n: @last_sync.summary.updated)}{#if @last_sync.summary.archived > 0}, {l("%{n} archived", n: @last_sync.summary.archived)}{/if}{#if @last_sync.summary.errors != []}, {l("%{n} error(s)", n: length(@last_sync.summary.errors))}{/if}
+                  {lp("%{n} new", "%{n} new", @last_sync.summary.created, n: @last_sync.summary.created)},
+                  {lp("%{n} updated", "%{n} updated", @last_sync.summary.updated, n: @last_sync.summary.updated)}{#if @last_sync.summary.archived > 0}, {lp("%{n} archived", "%{n} archived", @last_sync.summary.archived, n: @last_sync.summary.archived)}{/if}{#if @last_sync.summary.errors != []}, {lp("%{n} error", "%{n} errors", length(@last_sync.summary.errors),
+                      n: length(@last_sync.summary.errors)
+                    )}{/if}
                 </span>
               {/if}
               <button
@@ -584,14 +613,27 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                       {#if stage == :tiers and member_stage_counts(@member_sync_status, stage)}
                         <li>
                           <b>{stage}</b>:
-                          {l("%{n} created", n: member_stage_counts(@member_sync_status, stage)[:created])}
-                          · {l("%{n} updated", n: member_stage_counts(@member_sync_status, stage)[:updated])}
-                          · {l("%{n} unchanged", n: member_stage_counts(@member_sync_status, stage)[:unchanged])}
+                          {lp("%{n} created", "%{n} created", member_stage_counts(@member_sync_status, stage)[:created],
+                            n: member_stage_counts(@member_sync_status, stage)[:created]
+                          )}
+                          · {lp("%{n} updated", "%{n} updated", member_stage_counts(@member_sync_status, stage)[:updated],
+                            n: member_stage_counts(@member_sync_status, stage)[:updated]
+                          )}
+                          · {lp(
+                            "%{n} unchanged",
+                            "%{n} unchanged",
+                            member_stage_counts(@member_sync_status, stage)[:unchanged],
+                            n: member_stage_counts(@member_sync_status, stage)[:unchanged]
+                          )}
                           {#if member_stage_counts(@member_sync_status, stage)[:archived] > 0}
-                            · {l("%{n} archived", n: member_stage_counts(@member_sync_status, stage)[:archived])}
+                            · {lp("%{n} archived", "%{n} archived", member_stage_counts(@member_sync_status, stage)[:archived],
+                              n: member_stage_counts(@member_sync_status, stage)[:archived]
+                            )}
                           {/if}
                           {#if member_stage_counts(@member_sync_status, stage)[:errors_count] > 0}
-                            · {l("%{n} errors", n: member_stage_counts(@member_sync_status, stage)[:errors_count])}
+                            · {lp("%{n} error", "%{n} errors", member_stage_counts(@member_sync_status, stage)[:errors_count],
+                              n: member_stage_counts(@member_sync_status, stage)[:errors_count]
+                            )}
                           {/if}
                         </li>
                       {#elseif member_stage_counts(@member_sync_status, stage)}
@@ -600,12 +642,21 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                           {#if member_stage_current?(@member_sync_status, stage)}
                             {l("in progress — ")}
                           {/if}
-                          {l("%{n} provisioned", n: member_stage_counts(@member_sync_status, stage)[:provisioned])}
+                          {lp(
+                            "%{n} provisioned",
+                            "%{n} provisioned",
+                            member_stage_counts(@member_sync_status, stage)[:provisioned],
+                            n: member_stage_counts(@member_sync_status, stage)[:provisioned]
+                          )}
                           {#if member_stage_counts(@member_sync_status, stage)[:skipped] > 0}
-                            · {l("%{n} skipped", n: member_stage_counts(@member_sync_status, stage)[:skipped])}
+                            · {lp("%{n} skipped", "%{n} skipped", member_stage_counts(@member_sync_status, stage)[:skipped],
+                              n: member_stage_counts(@member_sync_status, stage)[:skipped]
+                            )}
                           {/if}
                           {#if member_stage_counts(@member_sync_status, stage)[:errors_count] > 0}
-                            · {l("%{n} errors", n: member_stage_counts(@member_sync_status, stage)[:errors_count])}
+                            · {lp("%{n} error", "%{n} errors", member_stage_counts(@member_sync_status, stage)[:errors_count],
+                              n: member_stage_counts(@member_sync_status, stage)[:errors_count]
+                            )}
                           {/if}
                         </li>
                       {#elseif member_stage_current?(@member_sync_status, stage)}

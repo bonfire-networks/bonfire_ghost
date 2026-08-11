@@ -402,7 +402,13 @@ defmodule Bonfire.Ghost.LiveHandler do
          )}
 
       true ->
-        {:info, l("All %{total} Ghost tier(s) already in sync — nothing to update", total: total)}
+        {:info,
+         lp(
+           "All %{total} Ghost tier already in sync — nothing to update",
+           "All %{total} Ghost tiers already in sync — nothing to update",
+           total,
+           total: total
+         )}
     end
   end
 end
