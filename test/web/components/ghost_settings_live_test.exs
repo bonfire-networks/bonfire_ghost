@@ -1,6 +1,9 @@
 defmodule Bonfire.Ghost.Web.GhostSettingsLiveTest do
   use ExUnit.Case, async: true
 
+  # bucket this into the backend CI leg: bare `ExUnit.Case` skips the tag the extension case templates apply, so without it this also runs in the federation job catch-all
+  @moduletag :backend
+
   alias Bonfire.Ghost.Web.GhostSettingsLive
 
   describe "format_date/1" do

@@ -3,6 +3,9 @@ defmodule Bonfire.Ghost.Web.Plugs.VerifyGhostSignatureTest do
   # app env. Runs without DB so no sandbox collisions.
   use ExUnit.Case, async: false
 
+  # bucket this into the backend CI leg: bare `ExUnit.Case` skips the tag the extension case templates apply, so without it this also runs in the federation job catch-all
+  @moduletag :backend
+
   import Plug.Conn
   import Plug.Test
 
