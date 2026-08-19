@@ -2,23 +2,14 @@ defmodule Bonfire.Ghost.Identities do
   @moduledoc """
   Persistent Ghost↔Bonfire identity links (the `bonfire_ghost_identity` table).
 
-  Email used to be the only join key between Ghost and Bonfire, so any change to
-  it (in Ghost, in Bonfire, or a mere case difference) forked a second local
-  identity, and the fork then captured attribution of subsequent article
-  imports. This table makes the link explicit and stable — one row per person:
+  Email used to be the only join key between Ghost and Bonfire, so any change to it (in Ghost, in Bonfire, or a mere case difference) forked a second local identity, and the fork then captured attribution of subsequent article imports. This table makes the link explicit and stable, one row per person:
 
   - `account_id` — the local account (primary key; the identity anchor)
   - `user_id` — the author/attribution profile, once known
-  - `ghost_staff_id` + `ghost_member_id` — Ghost keeps staff and members as
-    separate entities with separate ID spaces, and the same human can be both;
-    holding both on one row keeps them converged on one account
-  - `ghost_email` — the last email seen from Ghost, so sync can tell "Ghost
-    changed the email" (follow it) apart from "the person changed their Bonfire
-    email" (respect it — the link is ID-based and survives either way)
+  - `ghost_staff_id` + `ghost_member_id` — Ghost keeps staff and members as separate entities with separate ID spaces, and the same human can be both; holding both on one row keeps them converged on one account
+  - `ghost_email` — the last email seen from Ghost, so sync can tell "Ghost changed the email" (follow it) apart from "the person changed their Bonfire email" (respect it, as the link is ID-based and survives either way)
 
-  Resolution is id-first with email as fallback; every provisioning path calls
-  `link/2` so identities provisioned before this table get their ids backfilled
-  on the next touch.
+  Resolution is id-first with email as fallback; every provisioning path calls `link/2` so identities provisioned before this table get their ids backfilled on the next touch.
   """
 
   import Untangle

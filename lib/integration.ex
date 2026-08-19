@@ -29,6 +29,7 @@ defmodule Bonfire.Ghost do
 
   alias Bonfire.Ghost.API
   alias Bonfire.Ghost.AdminAPI
+  alias Bonfire.Common.Cache
 
   declare_extension(
     l("Ghost blog"),
@@ -41,6 +42,34 @@ defmodule Bonfire.Ghost do
   @doc "Returns the configured Ghost blog URL, or nil if not configured."
   def ghost_url do
     Config.get([:bonfire_ghost, :ghost_url])
+  end
+
+  @doc """
+  The blog's PUBLIC site URL (which imported articles' `canonical_uri` actually uses) for matching imported content.
+
+  Distinct from `ghost_url/0`, which is the API/admin base: a Ghost-hosted site's API host (e.g. `https://foo.ghost.io`) differs from its public domain (e.g. `https://foo.de`, which the ghost.io host merely redirects to), and article URLs are stamped with the public domain, so matching `canonical_uri` against the API base finds nothing.
+
+  Resolved from the Ghost Content API `settings.url` (the same value the settings page shows), cached because callers like `imported_ghost_author?/1` run in the login-critical path. Falls back to `ghost_url/0` when Ghost is unconfigured or unreachable.
+  """
+  def public_url do
+    cached_public_url() || ghost_url()
+  end
+
+  defp cached_public_url do
+    Cache.maybe_apply_cached({__MODULE__, :fetch_public_url}, [], expire: :timer.hours(24))
+  rescue
+    _ -> nil
+  end
+
+  @doc false
+  def fetch_public_url do
+    with {:ok, client} <- client(),
+         {:ok, %{"settings" => %{"url" => url}}} when is_binary(url) and url != "" <-
+           API.get_settings(client) do
+      String.trim_trailing(url, "/")
+    else
+      _ -> nil
+    end
   end
 
   @doc """
@@ -82,7 +111,7 @@ defmodule Bonfire.Ghost do
   Note: `canonical_uri` is unindexed, so this is a table scan; fine for this admin-only settings page, but add an index (or revive a peer-based count) if it ever runs hot.
   """
   def imported_articles_count(blog_url \\ nil) do
-    case blog_url || ghost_url() do
+    case blog_url || public_url() do
       url when is_binary(url) and url != "" ->
         count_peered_by_uri_prefix(String.trim_trailing(url, "/") <> "/")
 

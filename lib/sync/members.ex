@@ -429,11 +429,9 @@ defmodule Bonfire.Ghost.Sync.Members do
     end
   end
 
-  # A legacy article-author account predates the Ghost provisioning stash. An exact
-  # staff-slug → username match is only safe to claim when the same profile actually
-  # authored an imported object from this configured Ghost site.
+  # A legacy article-author account predates the Ghost provisioning stash. An exact staff-slug → username match is only safe to claim when the same profile actually authored an imported object from this configured Ghost site.
   defp imported_ghost_author?(%{id: user_id}) when is_binary(user_id) do
-    case Ghost.ghost_url() do
+    case Ghost.public_url() do
       url when is_binary(url) and url != "" ->
         prefix = String.trim_trailing(url, "/") <> "/%"
 
