@@ -561,7 +561,8 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
 
       boost_date = Bonfire.Common.DatesTimes.date_from_pointer(boost)
 
-      assert DateTime.compare(boost_date, before_boost) in [:eq, :gt]
+      # `compare/3` rather than `DateTime.compare/2`: the boost's date comes from its UID, which carries only milliseconds, so an exact comparison against a microsecond `utc_now/0` reads as `:lt` whenever the two land in the same millisecond
+      assert Bonfire.Common.DatesTimes.compare(boost, before_boost) in [:eq, :gt]
       assert DateTime.diff(DateTime.utc_now(), boost_date, :second) <= 1
     end
 
