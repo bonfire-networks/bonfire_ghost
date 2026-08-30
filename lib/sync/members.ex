@@ -498,7 +498,7 @@ defmodule Bonfire.Ghost.Sync.Members do
 
   # Shared by `member.deleted` and by the tier gate (a member who no longer holds a
   # required tier loses the gated circles but keeps their account — see the
-  # "Revocation stance" in docs/ghost-and-publishing.md).
+  # "How members and staff map to accounts" section in the extension README).
   defp revoke_tier_circles(%{} = ghost_member, because) do
     email = ghost_member["email"]
 
