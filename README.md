@@ -46,10 +46,12 @@ Feature behaviour is set per-instance in **Admin settings → Ghost** (settings 
 
 - **Default author**: fallback identity used when a Ghost article's author can't be resolved.
 - **Post into group or topic**: where imported articles are posted.
+- **Only auto-import these Ghost tags**: restrict auto-import to articles carrying the listed Ghost tag(s).
 - **Only import articles matching a topic**: import only when the article's primary tag matches a Bonfire topic.
 - **Auto-import on publish**: import and mirror articles as Ghost publishes/edits/deletes them (via webhook).
 - **Membership tiers**: which Ghost tiers may have a login-capable account (the tier gate; leave all off to allow any member).
 - **Gated login (Ghost members only)** + a login message: hides password login so eligible Ghost members/staff use passwordless login.
+- **External signup URL**: optional; adds a Sign up button next to login that redirects here (e.g. your Ghost subscribe page).
 
 
 ### Embed comments on Ghost articles
@@ -64,30 +66,31 @@ Add this script tag to your Ghost theme's `post.hbs`:
 
 ```html
 <script
-  src="https://your-bonfire.example/js/comments_embed.js?v1.4"
+  src="https://your-bonfire.example/js/comments_embed.js?v1.0"
   data-canonical-slug="{{slug}}"
 ></script>
 ```
 
-Options:
-
-- `data-canonical-slug`: the Ghost post slug (deduplicates via URL; use `data-canonical-id` for the Ghost ID instead)
+(the `?v1.0` is just a cache-bust query, bump it after updating Bonfire.)
 
 Loading the embed is read-only. It shows the thread of an article already imported by the webhook or the backfill, and never imports the article itself.
 
+All attributes below are optional `data-*` on the script tag.
 
-### Who an imported article belongs to, and where it goes
+Which thread it shows:
 
-The embed runs on your blog, so **anyone** can craft its iframe URL. It therefore accepts no attribute that chooses a post's author, audience or destination, as those are decided by the instance, in **Ghost settings**, and only apply through the trusted import paths (webhook and backfill):
+- `data-canonical-slug` / `data-canonical-id`: find the already-imported thread by the article's slug or ID on the original site (e.g. a Ghost slug/ID).
+- `data-media-uri`: find or create a thread for a URL (defaults to the current page). For a guest, a missing thread is only created when the URL's origin is in `IFRAME_ALLOWED_ORIGINS`; a signed-in viewer can anchor any URL.
+- `data-post-id`: point at a Bonfire thread by its ID directly.
 
-| Setting | Replaces the old attribute | What it does |
-|---|---|---|
-| Import author (`auto_import_as`) | `data-creator` | Fallback identity used when the Ghost article author cannot be resolved. Without either a resolvable Ghost author or this fallback, no thread is created. |
-| Post into group (`post_into_group`) | `data-group-id` | The group/topic imported articles are posted into. |
-| Require topic (`require_topic`) | `data-require-topic` | Only import when the article's primary tag matches a Bonfire topic. |
-| (none; derived from Ghost `visibility`) | `data-boundary` | Public/members/paid articles get their audience from Ghost itself; paid articles are `:see`-only with `:read` gated to the `ghost_tier:*` circles. |
+Display:
 
-> **Upgrading:** `data-creator`, `data-boundary`, `data-group-id`, `data-to-circles` and `data-require-topic` are now **ignored** (they let a visitor forge a post's author, or publish a paid article publicly). Old snippets keep working (the params are just dropped, with a warning logged) but if your theme relied on `data-group-id` or `data-require-topic`, set the equivalent instance setting above or that behaviour is silently lost.
+- `data-theme`: a DaisyUI theme name, e.g. "dark" or "light".
+- `data-mode`: "flat" or "nested" (default: the instance/user setting).
+- `data-sort-by` / `data-sort-order`: initial sort ("latest_reply", "reply_count", "boost_count", "like_count", "popularity_score", "newest") and direction ("asc"/"desc").
+- `data-token-max-age`: hours before a stored sign-in token is treated as stale (default 720, i.e. 30 days; the server clamps to a hard maximum).
+
+The author, destination group/topic and topic filter come from the settings above, and a members-only or paid article's audience comes from its Ghost visibility (paid articles stay gated to the `ghost_tier:*` circles).
 
 ## How members and staff map to accounts
 
