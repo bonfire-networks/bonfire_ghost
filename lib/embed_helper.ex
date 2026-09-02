@@ -474,8 +474,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
       Bonfire.Boundaries.Scaffold.Instance.custom_acl()
   end
 
-  # Resolves the target context and (idempotently) boosts the post into its feed, ensuring tag
-  # permission first. Best-effort: never fails the update.
+  # Resolves the target context and (idempotently) boosts the post into its feed, ensuring tag permission first. Best-effort: never fails the update.
   defp maybe_route_into_context(author, article, post, opts) do
     group_id = Keyword.get(opts, :group_id) || configured_default_group()
 
