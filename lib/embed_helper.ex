@@ -580,7 +580,9 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp ensure_author_can_post(author, context, group_id) do
     target = group_id || Enums.id(context)
 
-    case Bonfire.Classify.Categories.join_group(author, target, skip_boundary_check: true) do
+    case Bonfire.Classify.Categories.join_and_follow_group(author, target,
+           skip_boundary_check: true
+         ) do
       {:ok, _} ->
         :ok
 
