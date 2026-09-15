@@ -814,13 +814,16 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
-  # In a group context: "public" falls through to the group DCV; restricted visibilitym maps to group-aware presets
-  # TODO: only share with a particular circle?
+  # Ghost's own visibility always wins over the group/topic default content visibility:
+  # the group default only fills in when Ghost states no restriction. A "members" article
+  # imported into a public topic must NOT inherit `public` (regression: full body was
+  # readable by logged-out guests while the Ghost site showed a signup wall).
+  # TODO: only share with a particular circle?
   defp article_boundary(article, context) do
     case article_access(article) do
       :public -> "public"
-      # grouped `:local` falls through to the group's default content visibility (nil)
-      :local -> if context, do: nil, else: "local"
+      # any logged-in local user reads; guests get nothing — in and out of a group
+      :local -> "local"
       # see-only preview: public gets `:see` (preview card), `:read` only via the paid
       # `ghost_tier:*` circles granted in `to_circles`
       :paid -> if context, do: "nonfederated:preview", else: "local:preview"

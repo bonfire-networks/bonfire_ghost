@@ -395,18 +395,20 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
       assert Bonfire.Boundaries.can?(nil, :read, post)
     end
 
-    test "members → readable by any logged-in local user" do
+    test "members → readable by any logged-in local user, but NOT by a logged-out guest" do
       reader = Fake.fake_user!()
       post = import!("members")
       assert Bonfire.Boundaries.can?(reader, :see, post)
       assert Bonfire.Boundaries.can?(reader, :read, post)
+      refute Bonfire.Boundaries.can?(nil, :read, post)
     end
 
-    test "tiers including a free tier → readable by any logged-in local user" do
+    test "tiers including a free tier → readable by any logged-in local user, not by a guest" do
       reader = Fake.fake_user!()
       post = import!("tiers", %{"tiers" => [%{"slug" => "free"}, %{"slug" => "gold"}]})
       assert Bonfire.Boundaries.can?(reader, :see, post)
       assert Bonfire.Boundaries.can?(reader, :read, post)
+      refute Bonfire.Boundaries.can?(nil, :read, post)
     end
 
     test "tiers with only paid tiers → preview visible to all, read gated to those paid members" do
@@ -430,6 +432,104 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
       # tier member sees and reads
       assert Bonfire.Boundaries.can?(member, :see, post)
       assert Bonfire.Boundaries.can?(member, :read, post)
+    end
+  end
+
+  describe "restricted article inside a public group/topic keeps Ghost's restriction (A5)" do
+    # Regression: a `members` article imported into a public topic used to fall through
+    # to the topic's default content visibility (`public`), so logged-out guests could
+    # read the full body on Bonfire while the Ghost site showed a signup wall.
+    setup do
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      Process.put([:bonfire_ghost, :auto_import_as], author.id)
+
+      Bonfire.Ghost.Sync.Tiers.sync_tiers(
+        [
+          %{"id" => "t_free", "slug" => "free", "name" => "Free", "type" => "free"},
+          %{"id" => "t_gold", "slug" => "gold", "name" => "Gold", "type" => "paid"}
+        ],
+        []
+      )
+
+      creator = Fake.fake_user!()
+
+      # a public-on-instance group whose content is public by default
+      group =
+        Bonfire.Classify.Simulate.fake_group!(creator, %{
+          membership: "local:members",
+          visibility: "nonfederated",
+          participation: "anyone",
+          default_content_visibility: "nonfederated"
+        })
+
+      topic =
+        Bonfire.Classify.Simulate.fake_category!(
+          creator,
+          group,
+          %{type: :topic, name: "Politik"}
+        )
+
+      # the group default really is guest-readable — otherwise this test proves nothing
+      assert Bonfire.Classify.Boundaries.read_default_content_visibility(topic) == "nonfederated"
+
+      # route imports straight into the topic (same as the Jacobin setup)
+      Process.put([:bonfire_ghost, :post_into_group], topic.id)
+
+      {:ok, author: author, creator: creator, group: group, topic: topic}
+    end
+
+    defp import_into_topic!(_topic, visibility, extra \\ %{}) do
+      art = article() |> Map.merge(%{"visibility" => visibility}) |> Map.merge(extra)
+      {:ok, post} = EmbedHelper.import_article(art, [])
+      post
+    end
+
+    test "public article in a public topic is readable by guests (control)", %{topic: topic} do
+      post = import_into_topic!(topic, "public")
+      assert Bonfire.Boundaries.can?(nil, :read, post)
+    end
+
+    test "members article in a public topic is NOT readable by guests", %{topic: topic} do
+      reader = Fake.fake_user!()
+      post = import_into_topic!(topic, "members")
+
+      assert Bonfire.Boundaries.can?(reader, :read, post)
+      refute Bonfire.Boundaries.can?(nil, :read, post)
+    end
+
+    test "free-tier article in a public topic is NOT readable by guests", %{topic: topic} do
+      reader = Fake.fake_user!()
+
+      post =
+        import_into_topic!(topic, "tiers", %{
+          "tiers" => [%{"slug" => "free"}, %{"slug" => "gold"}]
+        })
+
+      assert Bonfire.Boundaries.can?(reader, :read, post)
+      refute Bonfire.Boundaries.can?(nil, :read, post)
+    end
+
+    test "re-syncing boundaries on an already-imported members article closes the hole", %{
+      topic: topic
+    } do
+      post = import_into_topic!(topic, "members")
+
+      # simulate the pre-fix state: stamp the topic's public default onto the post
+      author = Bonfire.Me.Users.by_username!("ghostbot")
+
+      {:ok, _} =
+        Bonfire.Boundaries.set_boundaries(author, post,
+          boundary: "nonfederated",
+          context_id: topic.id
+        )
+
+      assert Bonfire.Boundaries.can?(nil, :read, post)
+
+      # the upsert path re-applies boundaries from Ghost's visibility
+      art = Map.merge(article(), %{"visibility" => "members"})
+      assert {:ok, again} = EmbedHelper.import_article(art, [])
+      assert again.id == post.id
+      refute Bonfire.Boundaries.can?(nil, :read, post)
     end
   end
 
