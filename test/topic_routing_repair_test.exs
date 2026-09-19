@@ -110,9 +110,9 @@ defmodule Bonfire.Ghost.TopicRoutingRepairTest do
         {:ok, object}
     end)
 
-    Repatch.patch(Bonfire.Social.LivePush, :push_activity_object, [mode: :shared], fn
-      feed_ids, boost, object, opts ->
-        send(test_pid, {:unexpected_live_push, feed_ids, boost, object, opts})
+    Repatch.patch(Bonfire.Social.LivePush, :emit_live, [mode: :shared], fn
+      boost, feed_ids, opts ->
+        send(test_pid, {:unexpected_live_push, feed_ids, boost, opts})
         :ok
     end)
 
