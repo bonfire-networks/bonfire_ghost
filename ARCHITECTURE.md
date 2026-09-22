@@ -85,7 +85,7 @@ Three hot paths:
 | `lib/web/live_handler.ex` | `GhostSettingsLive` event handlers — `sync_tiers`, `load_more`, parallel Ghost fetches. |
 | `lib/web/components/ghost_settings_live.{ex,sface}` | Admin settings page: sync button, gated-mode toggle, last-sync summary. |
 | `lib/web/routes.ex` | Routes — `/ghost` (public), `/ghost/settings` (admin), `/ghost/webhook/:event` (pipe: `:basic_json`). |
-| `lib/login_email_provider.ex` | Adapter implementing `Bonfire.UI.Me.LoginEmailProvider`. Calls `Ghost.get_member_by_email/2` → `Sync.Members.provision_from_ghost_member/1`. |
+| `lib/login_email_provider.ex` | Adapter implementing `Bonfire.Me.LoginEmailProvider`. Calls `Ghost.get_member_by_email/2` → `Sync.Members.provision_from_ghost_member/1`. |
 | `lib/runtime_config.ex` | Reads env vars, sets `passwordless_only` when `GHOST_GATED_MODE` is truthy. |
 
 ### Outside the extension (touched by this feature)
@@ -208,9 +208,9 @@ they can set a password or continue requesting magic links).
 ### 6.7 Unknown-email fallback via `LoginEmailProvider` extension point
 
 `ForgotPasswordController.create/2` runs
-`Bonfire.UI.Me.LoginEmailProvider.ensure(email)` when the email isn't
+`Bonfire.Me.LoginEmailProvider.ensure(email)` when the email isn't
 already in the database. This is a plug-point — any extension can implement
-`@behaviour Bonfire.UI.Me.LoginEmailProvider` with an `ensure_account/1`
+`@behaviour Bonfire.Me.LoginEmailProvider` with an `ensure_account/1`
 callback and get registered automatically.
 
 Ghost's implementation:

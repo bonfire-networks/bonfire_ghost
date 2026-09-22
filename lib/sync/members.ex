@@ -12,10 +12,9 @@ defmodule Bonfire.Ghost.Sync.Members do
   the local one still tracks it).
 
   - `provision_from_ghost_member/1` — idempotent upsert. Creates the Account
-    (with a random high-entropy password — the member will use passwordless
-    login) and the User (handle derived from the email local part, `_2`..`_9`
-    suffix on collision) if missing, then reconciles their `ghost_tier:*`
-    circle memberships.
+    (credential-less: the member signs in by magic link) and the User (handle
+    derived from the email local part, `_2`..`_9` suffix on collision) if
+    missing, then reconciles their `ghost_tier:*` circle memberships.
   - `reconcile_circles/2` — diffs the user's current `ghost_tier:*` circles
     against the tiers in the Ghost payload. Tiers that haven't been synced
     yet (no local `ghost_tier:<slug>` circle) are silently skipped — the next
@@ -32,7 +31,6 @@ defmodule Bonfire.Ghost.Sync.Members do
   alias Bonfire.Boundaries.Circles
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
   alias Bonfire.Common.Cache
-  alias Bonfire.Common.Text
   alias Bonfire.Me.Accounts
   alias Bonfire.Me.Characters
   alias Bonfire.Me.Users
@@ -1069,16 +1067,9 @@ defmodule Bonfire.Ghost.Sync.Members do
   defp ensure_account(email) do
     case Accounts.get_by_email(email) do
       nil ->
-        # High-entropy random password — members sign in via Ghost's passwordless flow.
-        password = Text.random_string(32)
-
-        params = %{
-          email: %{email_address: email},
-          credential: %{password: password, password_confirmation: password}
-        }
-
+        # credential-less: members sign in via the passwordless magic-link flow
         with {:ok, account} <-
-               Accounts.signup(params, must_confirm?: false, skip_invite_check: true) do
+               Accounts.provision_passwordless_account(email) do
           {:ok, true, account}
         end
 

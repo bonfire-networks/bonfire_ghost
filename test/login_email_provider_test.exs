@@ -339,7 +339,7 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
       # go through the real dispatcher, which is what ForgotPasswordController calls.
       # It ALSO sends a hint when every provider returns :no_match — so if the Ghost
       # provider sends its own, the user is mailed twice for one login attempt.
-      assert :no_match = Bonfire.UI.Me.LoginEmailProvider.ensure([LoginEmailProvider], @email)
+      assert :no_match = Bonfire.Me.LoginEmailProvider.ensure([LoginEmailProvider], @email)
 
       assert_email_sent(fn email ->
         assert {_, @email} = hd(email.to)
@@ -351,7 +351,7 @@ defmodule Bonfire.Ghost.LoginEmailProviderTest do
     test "an upstream provider failure does not send a misleading registration hint" do
       stub_members({:error, :upstream_unavailable})
 
-      assert :no_match = Bonfire.UI.Me.LoginEmailProvider.ensure([LoginEmailProvider], @email)
+      assert :no_match = Bonfire.Me.LoginEmailProvider.ensure([LoginEmailProvider], @email)
       refute_email_sent()
     end
   end

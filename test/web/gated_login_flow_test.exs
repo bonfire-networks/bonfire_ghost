@@ -4,7 +4,7 @@ defmodule Bonfire.Ghost.Web.GatedLoginFlowTest do
 
       POST /login/forgot-password
         → Bonfire.UI.Me.ForgotPasswordController.create/2
-        → Bonfire.UI.Me.LoginEmailProvider.ensure/1   (behaviour auto-discovery)
+        → Bonfire.Me.LoginEmailProvider.ensure/1   (behaviour auto-discovery)
         → Bonfire.Ghost.LoginEmailProvider.ensure_account/1
         → Bonfire.Ghost.Sync.Members.provision_from_ghost_member/1
         → magic-link email

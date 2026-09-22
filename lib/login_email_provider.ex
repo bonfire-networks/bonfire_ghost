@@ -1,6 +1,6 @@
 defmodule Bonfire.Ghost.LoginEmailProvider do
   @moduledoc """
-  Adapter implementing `Bonfire.UI.Me.LoginEmailProvider` for Ghost CMS.
+  Adapter implementing `Bonfire.Me.LoginEmailProvider` for Ghost CMS.
 
   Auto-discovered at startup via `Bonfire.Common.ExtensionBehaviour`. Called
   from `Bonfire.UI.Me.ForgotPasswordController.create/2` when an unknown email
@@ -17,7 +17,7 @@ defmodule Bonfire.Ghost.LoginEmailProvider do
 
   Established accounts always get their magic link without Ghost being consulted. The controller only invokes `reconcile_account/2` for a profileless account, allowing a known external identity to repair an empty fork before the link is issued. The tier gate remains enforced on every path that can create an account, in `Bonfire.Ghost.Sync.Members.provision_from_ghost_member/2`.
   """
-  @behaviour Bonfire.UI.Me.LoginEmailProvider
+  @behaviour Bonfire.Me.LoginEmailProvider
 
   import Untangle
 
