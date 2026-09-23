@@ -209,7 +209,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   <#Icon iconify="ph:lightning" class="w-4 h-4 text-muted" />
                   {l("Webhook setup")}
                   <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                    <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+                    <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
                   </span>
                 </button>
                 <div x-show="expanded" x-collapse x-cloak class="px-3 pb-3 text-sm text-muted">
@@ -573,7 +573,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   <span class="badge badge-sm badge-ghost">{@page_info.total}</span>
                 {/if}
                 <span class="transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                  <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+                  <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
                 </span>
               </button>
             </h3>
@@ -761,7 +761,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   <span class="badge badge-sm badge-ghost">{@staff_page_info.total}</span>
                 {/if}
                 <span class="transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                  <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+                  <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
                 </span>
               </button>
             </h3>
@@ -851,7 +851,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
             <#Icon iconify="ph:info" class="w-5 h-5 text-muted" />
             {l("Blog details")}
             <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-              <#Icon iconify="ph:caret-down" class="w-4 h-4" />
+              <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
             </span>
           </button>
         </h3>
