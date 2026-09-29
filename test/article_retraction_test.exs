@@ -12,7 +12,7 @@ defmodule Bonfire.Ghost.ArticleRetractionTest do
      `previous` containing `url`, which is why nothing caught this.)
 
   2. **Even a successful hide did not stop reads.** `Blocks.block(_, :hide, :instance_wide)`
-     grants `:cannot_discover`, whose `cannot_verbs` is every verb *except* `[:read, :request]`
+     grants `:can_only_read`, whose `cannot_verbs` is every verb *except* `[:read, :request]`
      — it removes the post from feeds/search but deliberately leaves `:read` intact, so anyone
      with the direct link could still read a retracted article.
   """
@@ -83,7 +83,7 @@ defmodule Bonfire.Ghost.ArticleRetractionTest do
       assert {:ok, _} = EmbedHelper.hide_article(article(), [])
 
       refute Bonfire.Boundaries.can?(nil, :read, post.id),
-             ":hide only grants :cannot_discover, which leaves :read intact — the article is still readable by direct link"
+             ":hide only grants :can_only_read, which leaves :read intact — the article is still readable by direct link"
     end
 
     test "retracting a PAID article stops reads by a tier member too" do

@@ -95,7 +95,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
-  # `:hide` grants `:cannot_discover`, which excludes `[:read, :request]` — it unlists but leaves
+  # `:hide` grants `:can_only_read`, which excludes `[:read, :request]` — it unlists but leaves
   # the article readable by direct link. Retraction must also deny `:read`.
   defp retract(post_id) do
     with {:ok, _} <- Bonfire.Boundaries.Blocks.block(post_id, :hide, :instance_wide),
@@ -422,9 +422,9 @@ defmodule Bonfire.Ghost.EmbedHelper do
           article_boundary(article, context) ||
           (context && Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
           "public",
-      to_circles:
-        ((context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || []) ++
-          read_circles
+      # only the paid tiers: the group's own shared ACLs are attached by `SetBoundaries`, so naming its circles here would give each post an ACL of its own for them
+      # ((context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || []) ++
+      to_circles: read_circles
     }
   end
 
