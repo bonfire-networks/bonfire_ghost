@@ -2,22 +2,16 @@ defmodule Bonfire.Ghost.Web.Plugs.VerifyGhostSignature do
   @moduledoc """
   Verifies the `X-Ghost-Signature` header on incoming Ghost webhook requests.
 
-  Ghost signs each webhook with HMAC-SHA256 of `body <> unix_millis_timestamp`
-  using the shared secret configured on the Ghost integration. The header
-  format is:
+  Ghost signs each webhook with HMAC-SHA256 of `body <> unix_millis_timestamp` using the shared secret configured on the Ghost integration. The header format is:
 
       X-Ghost-Signature: sha256=<hex>, t=<unix-ms>
 
   This plug:
 
-    1. Reads the raw body stashed by `Bonfire.Ghost.BodyReader` at
-       `conn.private[:bonfire_raw_body]` (because `Plug.Parsers` has already
-       consumed and JSON-decoded the stream by the time routes run).
-    2. Rejects the request with 401 if the header is missing/malformed or the
-       HMAC doesn't match.
+    1. Reads the raw body stashed by `Bonfire.Ghost.BodyReader` at `conn.private[:bonfire_raw_body]` (because `Plug.Parsers` has already consumed and JSON-decoded the stream by the time routes run).
+    2. Rejects the request with 401 if the header is missing/malformed or the HMAC doesn't match.
     3. Rejects with 401 if `t` is outside a 5-minute window (replay guard).
-    4. Rejects with 503 if no secret is configured — we fail closed rather
-       than accept unsigned traffic.
+    4. Rejects with 503 if no secret is configured — we fail closed rather than accept unsigned traffic.
 
   Constant-time comparison via `Plug.Crypto.secure_compare/2`.
   """

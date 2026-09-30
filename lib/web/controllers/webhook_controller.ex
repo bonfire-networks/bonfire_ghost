@@ -2,14 +2,9 @@ defmodule Bonfire.Ghost.Web.WebhookController do
   @moduledoc """
   Receives Ghost membership webhooks.
 
-  The route pipeline runs `Bonfire.Ghost.Web.Plugs.VerifyGhostSignature`
-  first, so by the time we get here the payload is trusted. This controller
-  does as little as possible: pick out the relevant Ghost member object,
-  enqueue an Oban job on `:ghost_webhooks`, return 200.
+  The route pipeline runs `Bonfire.Ghost.Web.Plugs.VerifyGhostSignature` first, so by the time we get here the payload is trusted. This controller does as little as possible: pick out the relevant Ghost member object, enqueue an Oban job on `:ghost_webhooks`, return 200.
 
-  Events are disambiguated by URL path. Ghost binds each webhook integration to
-  one event; the URL path is admin-chosen, so we use Ghost's *exact* event names
-  (see https://docs.ghost.org/webhooks) as the path segment:
+  Events are disambiguated by URL path. Ghost binds each webhook integration to one event; the URL path is admin-chosen, so we use Ghost's *exact* event names (see https://docs.ghost.org/webhooks) as the path segment:
 
       POST /ghost/webhook/member.added
       POST /ghost/webhook/member.edited
@@ -19,17 +14,14 @@ defmodule Bonfire.Ghost.Web.WebhookController do
       POST /ghost/webhook/post.unpublished
       POST /ghost/webhook/post.deleted
 
-  The earlier hyphenated member aliases (`member-added`, etc.) are still
-  accepted for backwards compatibility with already-configured webhooks.
+  The earlier hyphenated member aliases (`member-added`, etc.) are still accepted for backwards compatibility with already-configured webhooks.
 
   Ghost's `member.*` / `post.*` payload shape is:
 
       {"member": {"current": {...}, "previous": {...}}}
       {"post":   {"current": {...}, "previous": {...}}}
 
-  We pass `current` to the worker for added/edited/published and `previous` for
-  deleted (the object no longer exists by then). Post auto-import is opt-in —
-  see `Bonfire.Ghost.Workers.ArticleWebhookWorker`.
+  We pass `current` to the worker for added/edited/published and `previous` for deleted (the object no longer exists by then). Post auto-import is opt-in, see `Bonfire.Ghost.Workers.ArticleWebhookWorker`.
   """
 
   use Bonfire.UI.Common.Web, :controller
