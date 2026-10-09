@@ -86,7 +86,7 @@ config :bonfire_ghost,
             </div>
 
             {#if excerpt = post["excerpt"]}
-              <p class="text-base-content/80 mt-2">{excerpt}</p>
+              <p class="text-muted mt-2">{excerpt}</p>
             {/if}
 
             {#if tags = post["tags"]}
