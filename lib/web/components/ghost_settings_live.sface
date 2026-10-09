@@ -29,7 +29,7 @@
             <#Icon iconify="ph:ghost-duotone" class="w-6 h-6 text-muted" />
           </div>
           <div class="min-w-0">
-            <h3 class="font-semibold text-base">{l("Connect your Ghost blog")}</h3>
+            <h3 class="font-bold text-base">{l("Connect your Ghost blog")}</h3>
             <p class="text-sm text-muted mt-1">
               {l("Set these environment variables, then restart to connect:")}
             </p>
@@ -54,7 +54,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
           {/if}
           <div class="min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="font-semibold text-base truncate">{@settings["title"] || l("Untitled blog")}</span>
+              <span class="font-bold text-base truncate">{@settings["title"] || l("Untitled blog")}</span>
               <span :if={@settings["version"]} class="badge badge-sm badge-ghost">{@settings["version"]}</span>
               <span class="inline-flex items-center gap-1.5 text-xs font-medium text-success">
                 <span class="w-2 h-2 rounded-full bg-success" />
@@ -122,7 +122,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
         <section class="rounded-box border border-divider bg-base-100">
           <div class="flex items-center gap-2 p-4 border-b border-divider">
             <#Icon iconify="ph:file-arrow-down" class="w-5 h-5 text-muted" />
-            <h3 class="font-semibold text-base">{l("Article import")}</h3>
+            <h3 class="font-bold text-base">{l("Article import")}</h3>
           </div>
 
           <div class="p-4 space-y-4">
@@ -408,7 +408,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
         <section class="rounded-box border border-divider bg-base-100">
           <div class="flex items-center gap-2 p-4 border-b border-divider">
             <#Icon iconify="ph:lock-simple" class="w-5 h-5 text-muted" />
-            <h3 class="font-semibold text-base">{l("Access & login")}</h3>
+            <h3 class="font-bold text-base">{l("Access & login")}</h3>
           </div>
 
           <div class="p-4 space-y-4">
@@ -466,7 +466,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
       {#if @tiers != []}
         <section class="rounded-box border border-divider bg-base-100">
           <div class="flex items-center justify-between gap-3 p-4 border-b border-divider flex-wrap">
-            <h3 class="flex items-center gap-2 font-semibold text-base">
+            <h3 class="flex items-center gap-2 font-bold text-base">
               <#Icon iconify="ph:ticket" class="w-5 h-5 text-muted" />
               {l("Membership tiers")}
               <span class="badge badge-sm badge-ghost">{length(@tiers)}</span>
@@ -531,10 +531,10 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   <div class="flex items-center gap-4 shrink-0">
                     <div class="text-right">
                       {#if tier["type"] == "paid"}
-                        <span class="font-semibold">{format_price(tier["monthly_price"], tier["currency"])}</span>
+                        <span class="font-bold">{format_price(tier["monthly_price"], tier["currency"])}</span>
                         <span class="text-xs text-muted">/{l("mo")}</span>
                       {#else}
-                        <span class="font-semibold">{l("Free")}</span>
+                        <span class="font-bold">{l("Free")}</span>
                       {/if}
                     </div>
 
@@ -565,7 +565,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 id="ghost-members-toggle"
                 type="button"
                 x-on:click="expanded = !expanded"
-                class="flex items-center gap-2 font-semibold text-base"
+                class="flex items-center gap-2 font-bold text-base"
               >
                 <#Icon iconify="ph:users" class="w-5 h-5 text-muted" />
                 {l("Members")}
@@ -753,7 +753,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 id="ghost-staff-toggle"
                 type="button"
                 x-on:click="expanded = !expanded"
-                class="flex items-center gap-2 font-semibold text-base"
+                class="flex items-center gap-2 font-bold text-base"
               >
                 <#Icon iconify="ph:pen-nib" class="w-5 h-5 text-muted" />
                 {l("Staff & contributors")}
@@ -846,7 +846,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
             id="ghost-blog-details-toggle"
             type="button"
             x-on:click="expanded = !expanded"
-            class="w-full flex items-center gap-2 p-4 font-semibold text-base"
+            class="w-full flex items-center gap-2 p-4 font-bold text-base"
           >
             <#Icon iconify="ph:info" class="w-5 h-5 text-muted" />
             {l("Blog details")}
