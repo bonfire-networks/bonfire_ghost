@@ -1,7 +1,7 @@
 <div class="space-y-4">
   {#if !@authorized}
     <div class="rounded-box border border-divider bg-base-100 p-6 flex items-start gap-3">
-      <#Icon iconify="ph:lock-simple" class="w-5 h-5 text-muted shrink-0" />
+      <#Icon iconify="ph:lock-simple" class="size-5 text-muted shrink-0" />
       <div>
         <h3 class="font-medium">{l("Admins only")}</h3>
         <p class="text-sm text-muted">{l("You need permission to manage this instance to view the Ghost integration settings.")}</p>
@@ -11,7 +11,7 @@
     {!-- Loading State — skeleton, not a centered spinner (product convention) --}
     {#if @loading}
       <div class="rounded-box border border-divider bg-base-100 p-4 flex items-center gap-4">
-        <div class="skeleton h-12 w-12 rounded" />
+        <div class="skeleton size-12 rounded" />
         <div class="flex-1 space-y-2">
           <div class="skeleton h-4 w-48" />
           <div class="skeleton h-3 w-64" />
@@ -25,8 +25,8 @@
     {#elseif is_nil(@settings)}
       <div class="rounded-box border border-divider bg-base-100 p-6">
         <div class="flex items-start gap-4">
-          <div class="w-12 h-12 rounded bg-base-200 flex items-center justify-center shrink-0">
-            <#Icon iconify="ph:ghost-duotone" class="w-6 h-6 text-muted" />
+          <div class="size-12 rounded bg-base-200 flex items-center justify-center shrink-0">
+            <#Icon iconify="ph:ghost-duotone" class="size-6 text-muted" />
           </div>
           <div class="min-w-0">
             <h3 class="font-bold text-base">{l("Connect your Ghost blog")}</h3>
@@ -46,10 +46,10 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
       <div class="rounded-box border border-divider bg-base-100 p-4 flex flex-wrap items-center gap-x-6 gap-y-3">
         <div class="flex items-center gap-3 min-w-0">
           {#if logo = @settings["logo"] || @settings["icon"]}
-            <img src={logo} alt="" class="w-10 h-10 rounded object-contain bg-base-200 shrink-0">
+            <img src={logo} alt="" class="size-10 rounded object-contain bg-base-200 shrink-0">
           {#else}
-            <div class="w-10 h-10 rounded bg-base-200 flex items-center justify-center shrink-0">
-              <#Icon iconify="ph:ghost-duotone" class="w-5 h-5 text-muted" />
+            <div class="size-10 rounded bg-base-200 flex items-center justify-center shrink-0">
+              <#Icon iconify="ph:ghost-duotone" class="size-5 text-muted" />
             </div>
           {/if}
           <div class="min-w-0">
@@ -57,7 +57,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               <span class="font-bold text-base truncate">{@settings["title"] || l("Untitled blog")}</span>
               <span :if={@settings["version"]} class="badge badge-sm badge-ghost">{@settings["version"]}</span>
               <span class="inline-flex items-center gap-1.5 text-xs font-medium text-success">
-                <span class="w-2 h-2 rounded-full bg-success" />
+                <span class="size-2 rounded-full bg-success" />
                 {l("Connected")}
               </span>
             </div>
@@ -69,7 +69,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               class="link link-hover text-sm text-muted inline-flex items-center gap-1 mt-0.5"
             >
               <span class="truncate">{@settings["url"]}</span>
-              <#Icon iconify="ph:arrow-square-out" class="w-4 h-4 shrink-0" />
+              <#Icon iconify="ph:arrow-square-out" class="size-4 shrink-0" />
             </a>
           </div>
         </div>
@@ -110,7 +110,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               phx-click="Bonfire.Ghost:refresh"
               phx-target={@myself}
             >
-              <#Icon iconify="ph:arrow-clockwise" class="w-4 h-4" />
+              <#Icon iconify="ph:arrow-clockwise" class="size-4" />
               {l("Refresh")}
             </button>
           </div>
@@ -121,7 +121,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
       {#if Bonfire.Ghost.configured?()}
         <section class="rounded-box border border-divider bg-base-100">
           <div class="flex items-center gap-2 p-4 border-b border-divider">
-            <#Icon iconify="ph:file-arrow-down" class="w-5 h-5 text-muted" />
+            <#Icon iconify="ph:file-arrow-down" class="size-5 text-muted" />
             <h3 class="font-bold text-base">{l("Article import")}</h3>
           </div>
 
@@ -206,10 +206,10 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   x-on:click="expanded = !expanded"
                   class="w-full flex items-center gap-2 p-3 text-sm font-medium text-left"
                 >
-                  <#Icon iconify="ph:lightning" class="w-4 h-4 text-muted" />
+                  <#Icon iconify="ph:lightning" class="size-4 text-muted" />
                   {l("Webhook setup")}
                   <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                    <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
+                    <#Icon iconify="carbon:chevron-down" class="size-4" />
                   </span>
                 </button>
                 <div x-show="expanded" x-collapse x-cloak class="px-3 pb-3 text-sm text-muted">
@@ -237,7 +237,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               </div>
               {#if sync_in_flight?(@article_sync_status) and not sync_stalled?(@article_sync_status)}
                 <button id="ghost-sync-articles" class="btn btn-primary btn-sm gap-2" disabled>
-                  <span class="loading loading-spinner w-4 h-4" />
+                  <span class="loading loading-spinner size-4" />
                   {l("Importing…")}
                 </button>
               {#else}
@@ -250,7 +250,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                     "Import every published article from this Ghost blog? This can create a large number of posts in the background. It's safe to re-run, but only start it once."
                   )}
                 >
-                  <#Icon iconify="ph:download-simple" class="w-4 h-4" />
+                  <#Icon iconify="ph:download-simple" class="size-4" />
                   {l("Sync articles")}
                 </button>
               {/if}
@@ -263,12 +263,12 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               >
                 {#if sync_state(@article_sync_status) == :queued}
                   <div class="flex items-center gap-2">
-                    <span class="loading loading-spinner w-4 h-4" />
+                    <span class="loading loading-spinner size-4" />
                     <span>{l("Import queued — waiting for a background worker to pick it up…")}</span>
                   </div>
                   {#if sync_stalled?(@article_sync_status)}
                     <div class="flex items-start gap-2 text-warning">
-                      <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0 mt-0.5" />
+                      <#Icon iconify="ph:warning" class="size-4 shrink-0 mt-0.5" />
                       <span>{l(
                           "Still not picked up since %{date} — the background worker may be unavailable. Ask the server operator to restart background processing; this persisted job will then continue automatically.",
                           date: format_time_ago(@article_sync_status[:updated_at])
@@ -277,7 +277,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   {/if}
                 {#elseif sync_state(@article_sync_status) in [:running, :retrying]}
                   <div class="flex items-center gap-2">
-                    <span class="loading loading-spinner w-4 h-4" />
+                    <span class="loading loading-spinner size-4" />
                     <span>{l("Importing articles from Ghost (page %{page})…",
                         page: max(sync_count(@article_sync_status, :page), 1)
                       )}</span>
@@ -308,7 +308,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   {/if}
                   {#if sync_stalled?(@article_sync_status)}
                     <div class="flex items-start gap-2 text-warning">
-                      <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0 mt-0.5" />
+                      <#Icon iconify="ph:warning" class="size-4 shrink-0 mt-0.5" />
                       <span>{l(
                           "No progress since %{date} — the import appears to be stuck at the stage shown above. Ask the server operator to restart background processing; completed pages are checkpointed and resume automatically.",
                           date: format_time_ago(@article_sync_status[:updated_at])
@@ -317,7 +317,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   {/if}
                   {#if sync_state(@article_sync_status) == :retrying}
                     <div class="flex items-center gap-2 text-warning">
-                      <#Icon iconify="ph:warning" class="w-4 h-4 shrink-0" />
+                      <#Icon iconify="ph:warning" class="size-4 shrink-0" />
                       <span>{l(
                           "Fetching from Ghost failed (%{reason}) — retrying automatically (attempt %{attempt} of %{max})…",
                           reason: @article_sync_status[:reason] || "?",
@@ -328,7 +328,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   {/if}
                 {#elseif sync_state(@article_sync_status) == :done}
                   <div class="flex items-center gap-2 text-success">
-                    <#Icon iconify="ph:check-circle" class="w-4 h-4 shrink-0" />
+                    <#Icon iconify="ph:check-circle" class="size-4 shrink-0" />
                     <span>{l("Import finished %{date}", date: format_time_ago(@article_sync_status[:finished_at]))}</span>
                   </div>
                   <div class="text-muted tabular-nums">
@@ -347,7 +347,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   </div>
                 {#elseif sync_state(@article_sync_status) == :failed}
                   <div class="flex items-center gap-2 text-error">
-                    <#Icon iconify="ph:x-circle" class="w-4 h-4 shrink-0" />
+                    <#Icon iconify="ph:x-circle" class="size-4 shrink-0" />
                     <span class="break-all">{l("Import failed: %{reason}",
                         reason: @article_sync_status[:reason] || l("unknown error")
                       )}</span>
@@ -407,7 +407,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
       {#if Bonfire.Ghost.admin_configured?()}
         <section class="rounded-box border border-divider bg-base-100">
           <div class="flex items-center gap-2 p-4 border-b border-divider">
-            <#Icon iconify="ph:lock-simple" class="w-5 h-5 text-muted" />
+            <#Icon iconify="ph:lock-simple" class="size-5 text-muted" />
             <h3 class="font-bold text-base">{l("Access & login")}</h3>
           </div>
 
@@ -453,7 +453,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
 
               {#if @tiers != []}
                 <p class="text-sm text-muted flex items-center gap-1.5">
-                  <#Icon iconify="ph:arrow-down" class="w-4 h-4" />
+                  <#Icon iconify="ph:arrow-down" class="size-4" />
                   {l("Choose which tiers are required for access under Membership tiers below.")}
                 </p>
               {/if}
@@ -467,7 +467,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
         <section class="rounded-box border border-divider bg-base-100">
           <div class="flex items-center justify-between gap-3 p-4 border-b border-divider flex-wrap">
             <h3 class="flex items-center gap-2 font-bold text-base">
-              <#Icon iconify="ph:ticket" class="w-5 h-5 text-muted" />
+              <#Icon iconify="ph:ticket" class="size-5 text-muted" />
               {l("Membership tiers")}
               <span class="badge badge-sm badge-ghost">{length(@tiers)}</span>
             </h3>
@@ -492,7 +492,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                   <span class="loading loading-spinner loading-xs" />
                   {l("Syncing…")}
                 {#else}
-                  <#Icon iconify="ph:arrows-clockwise" class="w-4 h-4" />
+                  <#Icon iconify="ph:arrows-clockwise" class="size-4" />
                   {l("Sync tiers")}
                 {/if}
               </button>
@@ -567,13 +567,13 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 x-on:click="expanded = !expanded"
                 class="flex items-center gap-2 font-bold text-base"
               >
-                <#Icon iconify="ph:users" class="w-5 h-5 text-muted" />
+                <#Icon iconify="ph:users" class="size-5 text-muted" />
                 {l("Members")}
                 {#if @page_info}
                   <span class="badge badge-sm badge-ghost">{@page_info.total}</span>
                 {/if}
                 <span class="transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                  <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
+                  <#Icon iconify="carbon:chevron-down" class="size-4" />
                 </span>
               </button>
             </h3>
@@ -586,7 +586,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 "Backfill Ghost staff and members? This runs a background job that provisions accounts and adds existing members to their tier circles."
               )}
             >
-              <#Icon iconify="ph:arrows-clockwise" class="w-4 h-4" />
+              <#Icon iconify="ph:arrows-clockwise" class="size-4" />
               {l("Sync members")}
             </button>
           </div>
@@ -682,7 +682,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
 
             {#if @members == []}
               <div class="text-center py-8 text-muted">
-                <#Icon iconify="ph:users" class="w-10 h-10 mb-2" />
+                <#Icon iconify="ph:users" class="size-10 mb-2" />
                 <p>{l("No members yet. Sync to pull them from Ghost.")}</p>
               </div>
             {#else}
@@ -715,9 +715,9 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                         </td>
                         <td>
                           {#if member["subscribed"]}
-                            <#Icon iconify="ph:check-circle-fill" class="w-5 h-5 text-success" />
+                            <#Icon iconify="ph:check-circle-fill" class="size-5 text-success" />
                           {#else}
-                            <#Icon iconify="ph:x-circle-fill" class="w-5 h-5 text-muted" />
+                            <#Icon iconify="ph:x-circle-fill" class="size-5 text-muted" />
                           {/if}
                         </td>
                         <td class="text-sm text-muted">{format_date(member["created_at"])}</td>
@@ -755,13 +755,13 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
                 x-on:click="expanded = !expanded"
                 class="flex items-center gap-2 font-bold text-base"
               >
-                <#Icon iconify="ph:pen-nib" class="w-5 h-5 text-muted" />
+                <#Icon iconify="ph:pen-nib" class="size-5 text-muted" />
                 {l("Staff & contributors")}
                 {#if @staff_page_info}
                   <span class="badge badge-sm badge-ghost">{@staff_page_info.total}</span>
                 {/if}
                 <span class="transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-                  <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
+                  <#Icon iconify="carbon:chevron-down" class="size-4" />
                 </span>
               </button>
             </h3>
@@ -776,7 +776,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
 
             {#if @staff == []}
               <div class="text-center py-8 text-muted">
-                <#Icon iconify="ph:pen-nib" class="w-10 h-10 mb-2" />
+                <#Icon iconify="ph:pen-nib" class="size-10 mb-2" />
                 <p>{l("No staff loaded. Sync to pull them from Ghost.")}</p>
               </div>
             {#else}
@@ -831,7 +831,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
         </section>
       {#else}
         <div class="rounded-box border border-divider bg-base-100 p-4 flex items-start gap-3">
-          <#Icon iconify="ph:info" class="w-5 h-5 text-muted shrink-0" />
+          <#Icon iconify="ph:info" class="size-5 text-muted shrink-0" />
           <div>
             <h3 class="font-medium">{l("Members & gated login unavailable")}</h3>
             <p class="text-sm text-muted">{l("Set GHOST_ADMIN_API_KEY to sync members and enable gated login.")}</p>
@@ -848,10 +848,10 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
             x-on:click="expanded = !expanded"
             class="w-full flex items-center gap-2 p-4 font-bold text-base"
           >
-            <#Icon iconify="ph:info" class="w-5 h-5 text-muted" />
+            <#Icon iconify="ph:info" class="size-5 text-muted" />
             {l("Blog details")}
             <span class="ml-auto transition-transform text-muted" x-bind:class="expanded ? 'rotate-180' : ''">
-              <#Icon iconify="carbon:chevron-down" class="w-4 h-4" />
+              <#Icon iconify="carbon:chevron-down" class="size-4" />
             </span>
           </button>
         </h3>
@@ -902,7 +902,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
     {!-- Error Display --}
     {#if @error}
       <div class="alert alert-error">
-        <#Icon iconify="ph:warning-circle" class="w-5 h-5" />
+        <#Icon iconify="ph:warning-circle" class="size-5" />
         <div>
           <h3 class="font-bold">{l("Error")}</h3>
           <p class="text-sm">{inspect(@error)}</p>
