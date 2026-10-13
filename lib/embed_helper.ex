@@ -84,10 +84,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
   it — so any attached comment thread is preserved. Accepts an article map or a
   canonical URL. Reversed by re-publishing (see `import_article/2`).
   """
-  def hide_article(article_or_url, _opts \\ []) do
+  def hide_article(article_or_url, opts \\ []) do
     case find_imported_post(article_or_url) do
-      {:ok, %{id: existing_id}} ->
-        retract(existing_id)
+      {:ok, %{id: existing_id} = post} ->
+        retract(existing_id, retracted_by(article_or_url, post, opts))
 
       _ ->
         info(article_or_url, "no post found for article — nothing to hide")
@@ -97,12 +97,36 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
   # `:hide` grants `:can_only_read`, which excludes `[:read, :request]` — it unlists but leaves
   # the article readable by direct link. Retraction must also deny `:read`.
-  defp retract(post_id) do
-    with {:ok, _} <- Bonfire.Boundaries.Blocks.block(post_id, :hide, :instance_wide),
+  # as the article's author, so the moderation log's record says they retracted it
+  defp retract(post_id, author) do
+    with {:ok, _} <-
+           Bonfire.Boundaries.Blocks.block(post_id, :hide,
+             current_user: author,
+             scope: :instance_wide
+           ),
          :ok <- set_read_denial(post_id, :deny) do
       {:ok, :hidden}
     end
   end
+
+  # the article's author, resolved as the import resolves them; given only a URL, the post's creator, who the import posted as
+  defp retracted_by(%{} = article, post, opts) do
+    case require_author(article, opts) do
+      {:ok, author} -> author
+      _ -> post_creator(post)
+    end
+  end
+
+  defp retracted_by(_url, post, _opts), do: post_creator(post)
+
+  defp post_creator(post),
+    do:
+      e(
+        Bonfire.Common.Repo.maybe_preload(post, [created: [:creator]], prune: true),
+        :created,
+        :creator,
+        nil
+      )
 
   defp set_read_denial(post_id, :deny) do
     with {:ok, acl} <- Acls.get_or_create_object_custom_acl(post_id, :instance_wide) do
