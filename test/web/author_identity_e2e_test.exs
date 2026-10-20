@@ -79,10 +79,11 @@ defmodule Bonfire.Ghost.Web.AuthorIdentityE2eTest do
 
     body = mail.text_body || mail.html_body
 
-    assert [_, token] = Regex.run(~r{/login/forgot-password/([^\s?"'<]+)}, body),
+    # a sign-in link opens its own page; pressing the button there (the POST) signs the person in
+    assert [_, token] = Regex.run(~r{/login/email/([^\s?"'<]+)}, body),
            "no login link found in the sent email"
 
-    get(conn(), "/login/forgot-password/#{token}")
+    post(conn(), "/login/email/#{token}")
   end
 
   defp unique_email(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}@test.local"

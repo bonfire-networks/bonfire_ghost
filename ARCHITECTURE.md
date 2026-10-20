@@ -195,11 +195,13 @@ scope. Instead:
 
 The login flow doesn't need a dedicated `:magic_login` `confirm_action`
 (yet). We reuse `Accounts.request_confirm_email/2` with
-`confirm_action: :login`, which sends an email whose URL lands on
-`ForgotPasswordController.index/2` — the same controller that handles
-password resets.
+`confirm_action: :login`, which sends an email whose URL opens
+`LoginLinkController` at `/login/email/:token`. Password reset links have their
+own page, `ForgotPasswordController` at `/login/forgot-password/:token`.
 
-Mail template URL trace (verified before shipping): `bonfire_me/lib/mails/mails.ex:143-169` → `url_path(ForgotPasswordController) <> "/" <> token` → `/login/forgot-password/:token`. Matches the controller's `:login_token` param.
+Opening either link only shows a page. Its button (a POST to the same path) uses the token up, so a mail scanner that opens the link can't. A used link stays valid for a short grace period (the `:confirm_grace` config key of `Bonfire.Data.Identity.Email`, five minutes by default).
+
+Mail template URL trace: `Bonfire.Me.Mails.login_link/2` passes `link_base: base_url() <> "/login/email"` to `confirm_token_email/2`, which appends `"/" <> token`. Matches the controller's `:login_token` param.
 
 A separate `:magic_login` action is a follow-up if we ever want to skip the
 change-password screen entirely (currently users land there after confirming;
