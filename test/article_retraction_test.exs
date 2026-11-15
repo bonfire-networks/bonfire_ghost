@@ -99,7 +99,7 @@ defmodule Bonfire.Ghost.ArticleRetractionTest do
         )
 
       member = Fake.fake_user!()
-      Bonfire.Boundaries.Circles.add_to_circles(member, gold)
+      Bonfire.Boundaries.Circles.add_to_circles(member, gold, skip_boundary_check: true)
 
       paid = article(%{"visibility" => "paid"})
       assert {:ok, post} = EmbedHelper.import_article(paid, [])

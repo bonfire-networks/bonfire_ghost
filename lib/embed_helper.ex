@@ -102,7 +102,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
     with {:ok, _} <-
            Bonfire.Boundaries.Blocks.block(post_id, :hide,
              current_user: author,
-             scope: :instance_wide
+             scope: :instance_wide,
+             skip_boundary_check: true
            ),
          :ok <- set_read_denial(post_id, :deny) do
       {:ok, :hidden}
@@ -129,7 +130,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
       )
 
   defp set_read_denial(post_id, :deny) do
-    with {:ok, acl} <- Acls.get_or_create_object_custom_acl(post_id, :instance_wide) do
+    with {:ok, acl} <- Acls.get_or_create_object_custom_acl(post_id, skip_boundary_check: true) do
       apply_read_denial(acl, :deny)
     end
   end
@@ -149,8 +150,17 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
     result =
       case deny_or_allow do
-        :deny -> Grants.grant_role(circles, acl, :cannot_read, scope: :instance_wide)
-        :allow -> Grants.remove_role(circles, acl, :cannot_read, scope: :instance_wide)
+        :deny ->
+          Grants.grant_role(circles, acl, :cannot_read,
+            scope: :instance_wide,
+            skip_boundary_check: true
+          )
+
+        :allow ->
+          Grants.remove_role(circles, acl, :cannot_read,
+            scope: :instance_wide,
+            skip_boundary_check: true
+          )
       end
 
     if Enums.all_ok?(result) do
@@ -236,7 +246,11 @@ defmodule Bonfire.Ghost.EmbedHelper do
   # silence/ghost circles, not object-discovery grants), so just attempt to
   # reverse it — `unblock(:hide)` is a no-op when nothing was hidden.
   defp maybe_unhide(post_id) do
-    Bonfire.Boundaries.Blocks.unblock(post_id, :hide, :instance_wide)
+    Bonfire.Boundaries.Blocks.unblock(post_id, :hide,
+      scope: :instance_wide,
+      skip_boundary_check: true
+    )
+
     # mirrors `retract/1`, else a re-published article returns to feeds but stays unreadable
     set_read_denial(post_id, :allow)
   rescue
@@ -463,7 +477,11 @@ defmodule Bonfire.Ghost.EmbedHelper do
       |> Enum.reject(&is_nil/1)
 
     if ghost_tier_subject_ids != [] and custom_acl_ids != [] do
-      Enum.each(ghost_tier_subject_ids, &Grants.remove_subject_from_acl(&1, custom_acl_ids))
+      # a Ghost sync (webhook), not a person acting
+      Enum.each(
+        ghost_tier_subject_ids,
+        &Grants.remove_subject_from_acl(&1, custom_acl_ids, skip_boundary_check: true)
+      )
     end
 
     :ok
@@ -479,7 +497,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
       |> Enum.filter(&(&1 in article_preset_acl_ids))
 
     if preset_acl_ids != [] do
-      Controlleds.remove_acls(post, preset_acl_ids)
+      Controlleds.remove_acls(post, preset_acl_ids, skip_boundary_check: true)
     end
 
     :ok

@@ -85,7 +85,10 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
     test "updates an existing public article when Ghost changes it to a paid tier" do
       outsider = Fake.fake_user!()
       member = Fake.fake_user!()
-      Bonfire.Boundaries.Circles.add_to_circles(member, tier_circle!("gold"))
+
+      Bonfire.Boundaries.Circles.add_to_circles(member, tier_circle!("gold"),
+        skip_boundary_check: true
+      )
 
       assert {:ok, post} = EmbedHelper.import_article(article())
       assert Bonfire.Boundaries.can?(outsider, :read, post)
@@ -134,8 +137,14 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
     test "removes stale Ghost tier grants when the allowed tier changes" do
       gold_member = Fake.fake_user!()
       silver_member = Fake.fake_user!()
-      Bonfire.Boundaries.Circles.add_to_circles(gold_member, tier_circle!("gold"))
-      Bonfire.Boundaries.Circles.add_to_circles(silver_member, tier_circle!("silver"))
+
+      Bonfire.Boundaries.Circles.add_to_circles(gold_member, tier_circle!("gold"),
+        skip_boundary_check: true
+      )
+
+      Bonfire.Boundaries.Circles.add_to_circles(silver_member, tier_circle!("silver"),
+        skip_boundary_check: true
+      )
 
       gold_article =
         Map.merge(article(), %{"visibility" => "tiers", "tiers" => [%{"slug" => "gold"}]})
@@ -359,7 +368,7 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
           Bonfire.Boundaries.Scaffold.Instance.admin_circle()
         )
 
-      Bonfire.Boundaries.Circles.add_to_circles(member, gold)
+      Bonfire.Boundaries.Circles.add_to_circles(member, gold, skip_boundary_check: true)
 
       assert {:ok, post} = EmbedHelper.import_article(paid_article(), [])
 
@@ -421,7 +430,7 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
           Bonfire.Boundaries.Scaffold.Instance.admin_circle()
         )
 
-      Bonfire.Boundaries.Circles.add_to_circles(member, gold)
+      Bonfire.Boundaries.Circles.add_to_circles(member, gold, skip_boundary_check: true)
 
       post = import!("tiers", %{"tiers" => [%{"slug" => "gold"}]})
 

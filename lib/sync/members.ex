@@ -1207,14 +1207,14 @@ defmodule Bonfire.Ghost.Sync.Members do
   defp do_add(_user, []), do: {:ok, 0}
 
   defp do_add(user, circle_ids) do
-    _ = Circles.add_to_circles(user, circle_ids)
+    _ = Circles.add_to_circles(user, circle_ids, skip_boundary_check: true)
     {:ok, length(circle_ids)}
   end
 
   defp do_remove(_user, []), do: {:ok, 0}
 
   defp do_remove(user, circle_ids) do
-    case Circles.remove_from_circles(user, circle_ids) do
+    case Circles.remove_from_circles(user, circle_ids, skip_boundary_check: true) do
       {count, _} -> {:ok, count}
       _ -> {:ok, length(circle_ids)}
     end

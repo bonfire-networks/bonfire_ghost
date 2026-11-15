@@ -25,7 +25,10 @@ defmodule Bonfire.Ghost.SplitAuthorRepair do
   """
   def repair_split_author(main_account, shell_user, opts \\ []) do
     with {:ok, _user} <-
-           Users.transfer_to_account(shell_user, main_account, skip_max_per_account: true) do
+           Users.transfer_to_account(shell_user, main_account,
+             skip_max_per_account: true,
+             skip_boundary_check: true
+           ) do
       reconcile_identity(main_account, shell_user, opts)
     end
   end

@@ -39,7 +39,7 @@ defmodule Bonfire.Ghost.Sync.StaffTierWipeTest do
 
   defp paying_member_user! do
     user = Fake.fake_user!()
-    Circles.add_to_circles(user, gold_circle!())
+    Circles.add_to_circles(user, gold_circle!(), skip_boundary_check: true)
     assert Circles.is_encircled_by?(user, gold_circle!().id)
     user
   end
