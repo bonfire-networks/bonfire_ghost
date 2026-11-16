@@ -110,10 +110,9 @@ defmodule Bonfire.Ghost.Web.GatedLoginFlowTest do
     assert account = Accounts.get_by_email(email)
     assert Bonfire.Me.Users.by_account!(account) == []
 
-    # ...and the magic sign-in link went out to them
-    assert_email_sent(fn mail ->
-      assert {_, ^email} = hd(mail.to)
-    end)
+    # ...and the magic sign-in link went out to them (in the background)
+    assert_receive {:email, mail}, 2_000
+    assert {_, ^email} = hd(mail.to)
   end
 
   test "an unknown email on a disallowed tier gets the SAME neutral response, no account, no email" do
@@ -186,9 +185,9 @@ defmodule Bonfire.Ghost.Web.GatedLoginFlowTest do
     assert account = Accounts.get_by_email(email)
     assert Bonfire.Me.Users.by_account!(account) == []
 
-    assert_email_sent(fn mail ->
-      assert {_, ^email} = hd(mail.to)
-    end)
+    # sent in the background
+    assert_receive {:email, mail}, 2_000
+    assert {_, ^email} = hd(mail.to)
   end
 
   test "a fresh email change keeps an existing staff/member author profile" do
@@ -267,8 +266,8 @@ defmodule Bonfire.Ghost.Web.GatedLoginFlowTest do
     assert resp.resp_body =~ "Check your inbox"
     refute_received :ghost_was_consulted
 
-    assert_email_sent(fn mail ->
-      assert {_, ^email} = hd(mail.to)
-    end)
+    # sent in the background
+    assert_receive {:email, mail}, 2_000
+    assert {_, ^email} = hd(mail.to)
   end
 end
