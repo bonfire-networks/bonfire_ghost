@@ -961,11 +961,7 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
              )
     end
 
-    # KNOWN GAP (currently RED): in prod the configured import bot (`auto_import_as`)
-    # is typically NOT a member of the target group/topic. A non-member's post reaches
-    # a GROUP feed but not a TOPIC feed — so imported articles silently miss the topic
-    # feed. These assert the DESIRED behaviour; fix pending (auto-add bot as member, or
-    # publish with elevated/caretaker permission).
+    # in prod the configured import bot (`auto_import_as`) is often not a member of the target group or topic: the import joins it to the group and lets it post in the topic, so its articles still reach both feeds
     test "a non-member import bot's article still reaches the target GROUP feed", %{
       creator: creator,
       group: group

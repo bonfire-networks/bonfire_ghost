@@ -32,7 +32,6 @@ defmodule Bonfire.Ghost.Sync.Members do
   alias Bonfire.Boundaries.Scaffold.Instance, as: InstanceScaffold
   alias Bonfire.Common.Cache
   alias Bonfire.Me.Accounts
-  alias Bonfire.Me.Characters
   alias Bonfire.Me.Users
   alias Bonfire.Data.Identity.Email
   alias Bonfire.Data.ActivityPub.Peered
@@ -43,7 +42,6 @@ defmodule Bonfire.Ghost.Sync.Members do
 
   @circle_prefix "ghost_tier:"
 
-  @handle_suffix_attempts 5
   @page_size 100
   @members_include "tiers,labels,newsletters"
 
@@ -1064,82 +1062,23 @@ defmodule Bonfire.Ghost.Sync.Members do
 
   defp ghost_kind(opts), do: Keyword.get(opts, :ghost_kind, "member")
 
-  defp ensure_account(email) do
-    case Accounts.get_by_email(email) do
-      nil ->
-        # credential-less: members sign in via the passwordless magic-link flow
-        with {:ok, account} <-
-               Accounts.provision_passwordless_account(email) do
-          {:ok, true, account}
-        end
-
-      account ->
-        {:ok, false, account}
-    end
-  end
+  # credential-less: members sign in via the passwordless magic-link flow
+  defp ensure_account(email), do: Accounts.get_or_provision_by_email(email)
 
   # --- User ----------------------------------------------------------------
 
   # `preferred_user_id` is the identity link's user: on an account with several
   # profiles, attribution must go to the linked author profile, not whichever
-  # user happens to come first.
+  # user happens to come first. A new user's username is the member's slug, else their display name.
   defp ensure_user(account, ghost_member, new?, preferred_user_id) do
-    existing =
-      if !new? do
-        users = Users.by_account!(account)
-        Enum.find(users, &(&1.id == preferred_user_id)) || List.first(users)
-      end
-
-    case existing do
-      nil ->
-        name = ghost_member["name"]
-        bases = candidate_handles(ghost_member)
-        try_create_user(account, bases, name, 1)
-
-      user ->
-        {:ok, user}
-    end
+    Users.get_or_create_for_account(
+      account,
+      ghost_member["name"],
+      [ghost_member["slug"], ghost_member["name"]],
+      new?: new?,
+      preferred_user_id: preferred_user_id
+    )
   end
-
-  defp try_create_user(_account, _bases, _name, attempt)
-       when attempt > @handle_suffix_attempts do
-    error("Could not find a free handle from any candidate")
-    {:error, :handle_exhausted}
-  end
-
-  defp try_create_user(account, bases, name, attempt) do
-    suffix = if attempt == 1, do: nil, else: Enum.random(2..99)
-
-    result =
-      Enum.find_value(bases, fn base ->
-        username = base |> handle_with_suffix(suffix) |> Characters.clean_username("")
-
-        case Users.create(%{profile: %{name: name}, character: %{username: username}}, account) do
-          {:ok, user} ->
-            {:ok, user}
-
-          {:error, %Ecto.Changeset{} = cs} ->
-            debug(cs, "Users.create failed for #{username}")
-            nil
-        end
-      end)
-
-    case result do
-      {:ok, user} -> {:ok, user}
-      nil -> try_create_user(account, bases, name, attempt + 1)
-    end
-  end
-
-  # Candidate base usernames in priority order: slug, display name.
-  # Suffixes (_2, _3 ...) are added by try_create_user only after all bases fail.
-  defp candidate_handles(ghost_member) do
-    [ghost_member["slug"], ghost_member["name"]]
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> Enum.uniq()
-  end
-
-  defp handle_with_suffix(base, nil), do: base
-  defp handle_with_suffix(base, n), do: "#{base}_#{n}"
 
   # --- Circles -------------------------------------------------------------
 

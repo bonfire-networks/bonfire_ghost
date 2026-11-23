@@ -3,7 +3,6 @@ defmodule Bonfire.Ghost.EmbedHelper do
   use Bonfire.Common.Config
   use Bonfire.Common.E
   alias Bonfire.Common.Enums
-  alias Bonfire.Common.DatesTimes
   alias Bonfire.Common.Settings
   alias Bonfire.Common.Text
   require Bonfire.Common.Settings
@@ -343,36 +342,27 @@ defmodule Bonfire.Ghost.EmbedHelper do
          %{boundary: boundary, to_circles: to_circles} <-
            article_boundary_attrs(article, context, boundary_opt),
          context_id = (context && Enums.id(context)) || nil,
-         # the article's own publication date, else an explicit `:published_at` override opt,
-         # so an old article is backdated instead of surfacing as fresh
-         published = e(article, "published_at", nil) || Keyword.get(opts, :published_at),
-         post_id = (published && DatesTimes.generate_ulid_if_past(published)) || nil,
          :ok <- report_import_stage(opts, :publishing_post),
+         # an Article when that extension is enabled, backdated, and with where it came from saved
          {:ok, post} <-
-           Bonfire.Posts.publish(
-             current_user: author,
-             # publish as an Article (the epic reuses the same logic, just with the
-             # `Article` schema, so the activity UI treats it as an article) when the
-             # extension is enabled; a nil schema falls back to a plain Post.
-             schema: article_schema(author),
+           Bonfire.Posts.publish_imported(
+             author,
+             %{
+               name: article["title"],
+               summary: article["custom_excerpt"],
+               html_body: article["html"] || "",
+               # the article's own publication date, else an explicit `:published_at` override opt,
+               # so an old article is backdated instead of surfacing as fresh
+               published_at: e(article, "published_at", nil) || Keyword.get(opts, :published_at),
+               canonical_url: url,
+               uploaded_media: primary_image_attachment(article)
+             },
              boundary: boundary,
              to_circles: to_circles,
              context_id: context_id,
-             mentions: [context_id],
-             auto_boost_at: published,
-             post_id: post_id,
-             post_attrs: %{
-               id: post_id,
-               post_content: %{
-                 name: article["title"],
-                 summary: article["custom_excerpt"],
-                 html_body: article["html"] || ""
-               },
-               uploaded_media: primary_image_attachment(article)
-             }
+             mentions: [context_id]
            ) do
       report_import_stage(opts, :saving_canonical_uri)
-      maybe_save_canonical_uri(post, url)
       {:ok, post}
     end
   end
@@ -537,7 +527,10 @@ defmodule Bonfire.Ghost.EmbedHelper do
   end
 
   defp read_imported(post_id, author) do
-    Bonfire.Posts.read(post_id, skip_boundary_check: true, schema: article_schema(author))
+    Bonfire.Posts.read(post_id,
+      skip_boundary_check: true,
+      schema: Bonfire.Posts.imported_schema(author)
+    )
   end
 
   defp require_author(article, opts) do
@@ -560,18 +553,6 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
       author ->
         {:ok, author}
-    end
-  end
-
-  defp maybe_save_canonical_uri(_post, nil), do: :ok
-
-  defp maybe_save_canonical_uri(post, url) do
-    case Peered.save_canonical_uri(post, url) do
-      {:ok, _} ->
-        :ok
-
-      err ->
-        error(err, "Could not save canonical URI for Ghost article — duplicates may occur")
     end
   end
 
@@ -601,12 +582,6 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp check_topic_requirement(false, _context_type), do: :ok
   defp check_topic_requirement(true, :topic), do: :ok
   defp check_topic_requirement(true, _context_type), do: {:error, :topic_required}
-
-  # `Bonfire.Articles.Article` schema when the extension is enabled, else nil (→ Post).
-  defp article_schema(author) do
-    if Bonfire.Common.Extend.module_enabled?(Bonfire.Articles, author),
-      do: Bonfire.Articles.Article
-  end
 
   # An imported article only lands in a group/topic feed if its author can post
   # there, which (for a topic especially) requires group membership. Idempotently
