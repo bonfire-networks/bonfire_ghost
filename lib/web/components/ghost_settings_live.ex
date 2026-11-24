@@ -17,6 +17,8 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   declare_settings_component(l("Ghost"),
     icon: "bi:newspaper",
     description: l("Configure Ghost blog integration and view members"),
+    # the instance's integration: listed in the instance settings only, not in a person's own
+    scope: :instance,
     # suppress the WidgetsLive wrapper title/description — the parent extension card already shows them
     data: %{}
   )
