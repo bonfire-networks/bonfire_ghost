@@ -35,6 +35,18 @@ defmodule Bonfire.Ghost.Web.GhostSettingsGroupTest do
       {:ok, %{"users" => [], "meta" => %{}}}
     end)
 
+    # what the forms save is instance settings, which are global config and outlive the test (and its users, which the sandbox rolls back): put them back for the tests that run after
+    for key <- [:auto_import_as, :post_into_group] do
+      previous = Application.fetch_env(:bonfire_ghost, key)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:bonfire_ghost, key, value)
+          :error -> Application.delete_env(:bonfire_ghost, key)
+        end
+      end)
+    end
+
     admin_account = fake_account!()
     admin = fake_admin!(admin_account)
     group = Bonfire.Classify.Simulate.fake_group!(admin)
