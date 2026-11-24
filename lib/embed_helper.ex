@@ -4,7 +4,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   use Bonfire.Common.E
   alias Bonfire.Common.Enums
   alias Bonfire.Common.Settings
-  alias Bonfire.Common.Text
+  alias Bonfire.Classify.Routing
   require Bonfire.Common.Settings
   import Bonfire.Common.Utils
   import Untangle
@@ -62,7 +62,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
             info(existing_id, "found an existing post for article — updating")
             # un-hide in case it had been unpublished before
             report_import_stage(opts, :unhiding_existing_post)
-            maybe_unhide(existing_id)
+            Bonfire.Posts.restore_imported(existing_id)
             update_post_from_article(existing_id, article, opts)
 
           _ ->
@@ -86,7 +86,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
   def hide_article(article_or_url, opts \\ []) do
     case find_imported_post(article_or_url) do
       {:ok, %{id: existing_id} = post} ->
-        retract(existing_id, retracted_by(article_or_url, post, opts))
+        Bonfire.Posts.retract_imported(existing_id, retracted_by(article_or_url, post, opts))
 
       _ ->
         info(article_or_url, "no post found for article — nothing to hide")
@@ -94,22 +94,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
-  # `:hide` grants `:can_only_read`, which excludes `[:read, :request]` — it unlists but leaves
-  # the article readable by direct link. Retraction must also deny `:read`.
-  # as the article's author, so the moderation log's record says they retracted it
-  defp retract(post_id, author) do
-    with {:ok, _} <-
-           Bonfire.Boundaries.Blocks.block(post_id, :hide,
-             current_user: author,
-             scope: :instance_wide,
-             skip_boundary_check: true
-           ),
-         :ok <- set_read_denial(post_id, :deny) do
-      {:ok, :hidden}
-    end
-  end
-
-  # the article's author, resolved as the import resolves them; given only a URL, the post's creator, who the import posted as
+  # who the moderation log records as retracting the article: its author, resolved as the import resolves them; given only a URL, the post's creator, who the import posted as
   defp retracted_by(%{} = article, post, opts) do
     case require_author(article, opts) do
       {:ok, author} -> author
@@ -127,47 +112,6 @@ defmodule Bonfire.Ghost.EmbedHelper do
         :creator,
         nil
       )
-
-  defp set_read_denial(post_id, :deny) do
-    with {:ok, acl} <- Acls.get_or_create_object_custom_acl(post_id, skip_boundary_check: true) do
-      apply_read_denial(acl, :deny)
-    end
-  end
-
-  # get-only, never get_or_create: `maybe_unhide/1` runs on every update webhook, so creating
-  # here would mint a custom ACL for every article on its first edit (and `single()` errors
-  # permanently if two concurrent webhooks each create one). No custom ACL → nothing to lift.
-  defp set_read_denial(post_id, :allow) do
-    case Acls.get_object_custom_acl(post_id) do
-      {:ok, acl} -> apply_read_denial(acl, :allow)
-      _ -> :ok
-    end
-  end
-
-  defp apply_read_denial(acl, deny_or_allow) do
-    circles = Bonfire.Boundaries.Blocks.instance_wide_circles([:guest, :local, :activity_pub])
-
-    result =
-      case deny_or_allow do
-        :deny ->
-          Grants.grant_role(circles, acl, :cannot_read,
-            scope: :instance_wide,
-            skip_boundary_check: true
-          )
-
-        :allow ->
-          Grants.remove_role(circles, acl, :cannot_read,
-            scope: :instance_wide,
-            skip_boundary_check: true
-          )
-      end
-
-    if Enums.all_ok?(result) do
-      :ok
-    else
-      error(result, "Could not #{deny_or_allow} :read on retracted Ghost article")
-    end
-  end
 
   # A real `post.deleted` payload carries no `url` (Ghost builds `previous` from changed DB
   # attributes; `url` is computed), so fall back to `canonical_url`, then to the slug.
@@ -240,21 +184,6 @@ defmodule Bonfire.Ghost.EmbedHelper do
   end
 
   defp slug_url(_), do: nil
-
-  # `:hide` blocks aren't detectable via `Blocks.is_blocked?` (that checks the
-  # silence/ghost circles, not object-discovery grants), so just attempt to
-  # reverse it — `unblock(:hide)` is a no-op when nothing was hidden.
-  defp maybe_unhide(post_id) do
-    Bonfire.Boundaries.Blocks.unblock(post_id, :hide,
-      scope: :instance_wide,
-      skip_boundary_check: true
-    )
-
-    # mirrors `retract/1`, else a re-published article returns to feeds but stays unreadable
-    set_read_denial(post_id, :allow)
-  rescue
-    e -> warn(e, "Could not un-hide previously hidden Ghost post")
-  end
 
   defp check_auto_import_tag_filter(article, opts) do
     opts
@@ -336,12 +265,11 @@ defmodule Bonfire.Ghost.EmbedHelper do
          {:ok, author} <- require_author(article, opts),
          :ok <- report_import_stage(opts, :resolving_destination),
          {context_type, context} <- resolve_context(group_id, article),
-         :ok <- check_topic_requirement(require_topic?, context_type),
+         :ok <- Routing.check_topic_requirement(require_topic?, context_type),
          :ok <- report_import_stage(opts, :authorizing_destination),
-         :ok <- ensure_author_can_post(author, context, group_id),
+         :ok <- Routing.ensure_author_can_post(author, context, group_id),
          %{boundary: boundary, to_circles: to_circles} <-
            article_boundary_attrs(article, context, boundary_opt),
-         context_id = (context && Enums.id(context)) || nil,
          :ok <- report_import_stage(opts, :publishing_post),
          # an Article when that extension is enabled, backdated, and with where it came from saved
          {:ok, post} <-
@@ -357,10 +285,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
                canonical_url: url,
                uploaded_media: primary_image_attachment(article)
              },
-             boundary: boundary,
-             to_circles: to_circles,
-             context_id: context_id,
-             mentions: [context_id]
+             [boundary: boundary, to_circles: to_circles] ++ Routing.publish_opts(context)
            ) do
       report_import_stage(opts, :saving_canonical_uri)
       {:ok, post}
@@ -381,6 +306,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
            }),
          :ok <- report_import_stage(opts, :loading_updated_post),
          {:ok, post} <- read_imported(post_id, author),
+         # a new feature image replaces the old one, as WordPress's sync does
+         {:ok, post} <- update_feature_image(post, author, article),
          :ok <- report_import_stage(opts, :updating_boundaries),
          :ok <- update_article_boundaries(author, article, post, opts) do
       # Content edits do not reapply topic routing, so retry the idempotent route operation.
@@ -413,7 +340,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
     boundary_opt = Keyword.get(opts, :boundary, nil)
 
     with {_, context} <- resolve_context(group_id, article),
-         :ok <- ensure_author_can_post(author, context, group_id),
+         :ok <- Routing.ensure_author_can_post(author, context, group_id),
          %{boundary: boundary, to_circles: to_circles} <-
            article_boundary_attrs(article, context, boundary_opt),
          set_opts =
@@ -446,10 +373,7 @@ defmodule Bonfire.Ghost.EmbedHelper do
 
     %{
       boundary:
-        boundary_opt ||
-          article_boundary(article, context) ||
-          (context && Bonfire.Classify.Boundaries.read_default_content_visibility(context)) ||
-          "public",
+        boundary_opt || article_boundary(article, context) || Routing.default_boundary(context),
       # only the paid tiers: the group's own shared ACLs are attached by `SetBoundaries`, so naming its circles here would give each post an ACL of its own for them
       # ((context && Bonfire.Classify.Boundaries.post_circles_for_group(context)) || []) ++
       to_circles: read_circles
@@ -510,16 +434,9 @@ defmodule Bonfire.Ghost.EmbedHelper do
   defp maybe_route_into_context(author, article, post, opts) do
     group_id = Keyword.get(opts, :group_id) || configured_default_group()
 
-    with {context_type, context} when context_type in [:topic, :group] and not is_nil(context) <-
-           resolve_context(group_id, article) do
-      ensure_author_can_post(author, context, group_id)
-
-      Bonfire.Social.Tags.maybe_auto_boost(author, context, post,
-        auto_boost_at: e(article, "published_at", nil)
-      )
-    else
-      _ -> :ok
-    end
+    Routing.boost_into_context(author, resolve_context(group_id, article), post, group_id,
+      auto_boost_at: e(article, "published_at", nil)
+    )
   rescue
     e ->
       warn(e, "Could not route re-published Ghost article into its topic feed")
@@ -579,75 +496,11 @@ defmodule Bonfire.Ghost.EmbedHelper do
     end
   end
 
-  defp check_topic_requirement(false, _context_type), do: :ok
-  defp check_topic_requirement(true, :topic), do: :ok
-  defp check_topic_requirement(true, _context_type), do: {:error, :topic_required}
+  # where an article goes: the configured group's topic matching its primary Ghost tag, else the group (see `Bonfire.Classify.Routing.resolve_context/2`)
+  defp resolve_context(group_id, article),
+    do: Routing.resolve_context(group_id, primary_tag_slug(article))
 
-  # An imported article only lands in a group/topic feed if its author can post
-  # there, which (for a topic especially) requires group membership. Idempotently
-  # add the configured import author to the target group so auto-import "just works"
-  # without an admin manually managing the bot's membership. Always returns `:ok`
-  # (a failure to join is warned, not fatal, the post is still created).
-  defp ensure_author_can_post(_author, nil, _group_id), do: :ok
-
-  # TODO: joining a *group* grants `:tag` (its members circle gets `:contribute`), but joining a
-  # *topic* grants nothing (a topic never wires its own members circle into its ACL), so the
-  # explicit grant below is needed. Cleaner fix would be at the source in bonfire_classify — have
-  # topics grant their own members circle `:contribute` — so "join → can participate" holds uniformly.
-  defp ensure_author_can_post(author, context, group_id) do
-    target = group_id || Enums.id(context)
-
-    case Bonfire.Classify.Categories.join_and_follow_group(author, target,
-           skip_boundary_check: true
-         ) do
-      {:ok, _} ->
-        :ok
-
-      other ->
-        warn(other, "Could not add import author to group/topic — post may not reach its feed")
-    end
-
-    # Membership alone can't tag a *topic* (grant goes to the parent group's members circle, not the
-    # topic's own — see `init_boundaries`), so the auto-boost silently no-ops. Grant `:contribute`
-    # (includes `:tag`) directly. Idempotent; no-op once the author already has tag permission.
-    #
-    # On `context`, not `target`: a group `target` can resolve to a child topic, and the boost needs
-    # `:tag` on that topic — `can?(:tag, target)` could pass via group membership while it can't.
-    maybe_grant_tag_permission(author, Enums.id(context) || target)
-
-    :ok
-  end
-
-  defp maybe_grant_tag_permission(author, object) do
-    if Bonfire.Boundaries.can?(author, :tag, object) do
-      :ok
-    else
-      Bonfire.Boundaries.Controlleds.grant_role(author, object, :contribute,
-        current_user: author,
-        skip_boundary_check: true
-      )
-
-      :ok
-    end
-  rescue
-    e ->
-      warn(e, "Could not grant :contribute to import author — post may not reach the topic feed")
-      :ok
-  end
-
-  defp resolve_context(group_id, article) when is_binary(group_id) do
-    case Bonfire.Classify.Categories.get(group_id, skip_boundary_check: true) do
-      {:ok, target} ->
-        if topic?(target) do
-          {:topic, target}
-        else
-          resolve_topic_in_group(target, article) || {:group, target}
-        end
-
-      _ ->
-        {:no_context, nil}
-    end
-  end
+  defp primary_tag_slug(article), do: e(article, "primary_tag", "slug", nil)
 
   @doc """
   Finds the unique child topic whose exact username or normalized display name matches an article's primary Ghost tag.
@@ -655,96 +508,20 @@ defmodule Bonfire.Ghost.EmbedHelper do
   The supplied group must already be loaded. Returns `{:error, :not_found}` when the article has no primary tag, no child topic matches, or multiple topic names normalize to the same slug.
   """
   def find_topic_for_article(group, article) when is_map(group) and is_map(article) do
-    case resolve_topic_in_group(group, article) do
+    case Routing.find_topic_in_group(group, primary_tag_slug(article)) do
       {:topic, topic} -> {:ok, topic}
       _ -> {:error, :not_found}
     end
   end
 
-  defp resolve_topic_in_group(group, article) do
-    with slug when is_binary(slug) <- e(article, "primary_tag", "slug", nil) do
-      case Bonfire.Classify.Categories.one(
-             [username: slug, parent_category: Enums.id(group), type: :topic],
-             skip_boundary_check: true
-           ) do
-        {:ok, topic} -> {:topic, topic}
-        _ -> resolve_topic_by_name_in_group(group, slug)
-      end
-    else
-      _ -> nil
-    end
+  # the post's media become the article's feature image, when it changed in Ghost (see `Bonfire.Files.update_object_media/3`)
+  defp update_feature_image(post, author, article) do
+    attachments = primary_image_attachment(article)
+
+    Bonfire.Files.update_object_media(post, Enum.map(attachments, & &1["href"]), fn ->
+      Enum.flat_map(attachments, &Bonfire.Files.Acts.AttachMedia.resolve_media(&1, author))
+    end)
   end
-
-  defp resolve_topic_by_name_in_group(group, slug) do
-    normalized_slug = Text.slug(slug)
-
-    matches = find_topic_name_matches(group, normalized_slug)
-
-    case matches do
-      [topic] -> {:topic, topic}
-      _ -> nil
-    end
-  end
-
-  defp find_topic_name_matches(group, normalized_slug, after_cursor \\ nil, matches \\ []) do
-    opts =
-      [skip_boundary_check: true, limit: 500]
-      |> maybe_put_after_cursor(after_cursor)
-
-    page =
-      Bonfire.Classify.Categories.list(
-        [:default, parent_category: Enums.id(group), type: :topic],
-        opts
-      )
-
-    matches =
-      page
-      |> e(:edges, [])
-      |> Enum.reduce(matches, fn topic, matches ->
-        case e(topic, :name, nil) do
-          name when is_binary(name) and length(matches) < 2 ->
-            if Text.slug(name) == normalized_slug, do: [topic | matches], else: matches
-
-          _ ->
-            matches
-        end
-      end)
-
-    next_cursor = e(page, :page_info, :end_cursor, nil)
-    has_next_page? = e(page, :page_info, :has_next_page, false)
-
-    if length(matches) < 2 and has_next_page? and is_binary(next_cursor) and
-         next_cursor != after_cursor do
-      find_topic_name_matches(group, normalized_slug, next_cursor, matches)
-    else
-      matches
-    end
-  end
-
-  defp maybe_put_after_cursor(opts, nil), do: opts
-  defp maybe_put_after_cursor(opts, cursor), do: Keyword.put(opts, :after, cursor)
-
-  defp topic?(category) do
-    e(category, :type, nil) in [:topic, "topic"]
-  end
-
-  defp resolve_context(nil, article) do
-    slug = e(article, "primary_tag", "slug", nil)
-
-    case slug && Bonfire.Classify.Categories.get(slug, skip_boundary_check: true) do
-      {:ok, topic} ->
-        if topic?(topic) do
-          {:topic, topic}
-        else
-          {:no_context, nil}
-        end
-
-      _ ->
-        {:no_context, nil}
-    end
-  end
-
-  defp resolve_context(_, _article), do: {:no_context, nil}
 
   defp primary_image_attachment(article) do
     case article["feature_image"] do

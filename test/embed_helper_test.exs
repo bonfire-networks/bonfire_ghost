@@ -54,6 +54,45 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
       assert {:ok, again} = EmbedHelper.import_article(%{article() | "title" => "Changed"})
       assert again.id == post.id
     end
+
+    # the post's media, by where each one is
+    defp media_paths(post) do
+      {:ok, post} = Bonfire.Common.Needles.get(post.id, skip_boundary_check: true)
+
+      post
+      |> Bonfire.Common.Repo.preload([files: :media], force: true)
+      |> Map.get(:files)
+      |> Map.new(&{&1.media.path, &1.media.id})
+    end
+
+    test "a new feature image in Ghost replaces the old one" do
+      old = "https://blog.test/content/images/old.jpg"
+      new = "https://blog.test/content/images/new.jpg"
+
+      assert {:ok, post} = EmbedHelper.import_article(Map.put(article(), "feature_image", old))
+      assert Map.keys(media_paths(post)) == [old]
+
+      assert {:ok, _} = EmbedHelper.import_article(Map.put(article(), "feature_image", new))
+      assert Map.keys(media_paths(post)) == [new]
+    end
+
+    # the control for the test above: the same feature image is kept, not made again
+    test "an unchanged feature image is left as it is" do
+      image = "https://blog.test/content/images/same.jpg"
+
+      assert {:ok, post} = EmbedHelper.import_article(Map.put(article(), "feature_image", image))
+      before = media_paths(post)
+      assert Map.keys(before) == [image]
+
+      assert {:ok, _} =
+               EmbedHelper.import_article(
+                 article()
+                 |> Map.put("feature_image", image)
+                 |> Map.put("title", "Changed")
+               )
+
+      assert media_paths(post) == before
+    end
   end
 
   describe "import_article/2 access updates" do

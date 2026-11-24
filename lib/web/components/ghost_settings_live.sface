@@ -128,7 +128,7 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
           <div class="p-4 space-y-4">
             {!-- Default author — used by BOTH iframe/embed imports and webhook auto-import,
                so it is not gated behind the auto-import toggle. --}
-            <form phx-submit="Bonfire.Common.Settings:save">
+            <form data-role="ghost_author_form" phx-submit="Bonfire.Common.Settings:save">
               <Bonfire.UI.Common.SettingsInputLive
                 keys={[:bonfire_ghost, :auto_import_as]}
                 scope={:instance}
@@ -144,16 +144,18 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
             {!-- Default group/topic — imported articles are posted into this group (or
                topic) so they appear in its feed. Used by BOTH webhook auto-import and
                embeds; an embed's `data-group-id` param still overrides per-request. --}
-            <form phx-submit="Bonfire.Common.Settings:save">
-              <Bonfire.UI.Common.SettingsInputLive
+            <form data-role="ghost_group_form" phx-change="Bonfire.Common.Settings:set">
+              <Bonfire.UI.Common.SettingsSelectLive
+                id="ghost_post_into_group"
                 keys={[:bonfire_ghost, :post_into_group]}
                 scope={:instance}
-                name={l("Post into group or topic")}
+                current_value={Bonfire.Ghost.post_into_group() || ""}
+                options={@group_options}
+                name={l("Post into group")}
+                label_name={l("Post into group")}
                 description={l(
-                  "Optional. ID or @username of a group/topic imported articles are posted into. An embed's data-group-id parameter overrides this."
+                  "Optional. The group imported articles are posted into. An embed's data-group-id parameter overrides this."
                 )}
-                placeholder="group ID or @username"
-                class="input input-bordered input-sm flex-1"
               />
             </form>
 

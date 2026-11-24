@@ -38,6 +38,7 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
   data auto_import, :boolean, default: false
   data articles_count, :any, default: nil
   data topic_matching_group, :any, default: :__unset__
+  data group_options, :list, default: []
   # Live status of the background article backfill — see Bonfire.Ghost.Sync.Articles.status/0.
   data article_sync_status, :any, default: nil
   data member_sync_status, :any, default: nil
@@ -107,7 +108,13 @@ defmodule Bonfire.Ghost.Web.GhostSettingsLive do
          # `checked` comparison and the webhook block agree. Reuses the canonical predicate.
          auto_import: Bonfire.Ghost.Workers.ArticleWebhookWorker.auto_import_enabled?(),
          # what the last member/staff backfill actually did, per stage
-         member_sync_status: Bonfire.Ghost.Sync.Members.status()
+         member_sync_status: Bonfire.Ghost.Sync.Members.status(),
+         # this instance's groups for the "Post into group" select: one query on every update
+         group_options:
+           Bonfire.Classify.Categories.local_group_options(Bonfire.Ghost.post_into_group(),
+             current_user: current_user(socket),
+             no_value_label: l("No group")
+           )
        )
        |> assign_show_topic_matching()
        |> maybe_resume_sync_polling()}
