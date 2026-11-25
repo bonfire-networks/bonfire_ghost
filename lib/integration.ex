@@ -104,6 +104,17 @@ defmodule Bonfire.Ghost do
   end
 
   @doc """
+  How the body of an article imported from the blog is sanitised (see `Bonfire.Common.Text.maybe_sane_html/2`): `:imported` keeps its figures, captions and card classes, `:strict` keeps only basic formatting, `:unsafe` keeps the HTML as it came. Unset is `:imported`. Same `Config.get` caveat as `post_into_group/0`.
+  """
+  def sanitise do
+    case Config.get([:bonfire_ghost, :sanitise], nil) do
+      value when value in [:strict, "strict"] -> :strict
+      value when value in [:unsafe, "unsafe"] -> :unsafe
+      _ -> :imported
+    end
+  end
+
+  @doc """
   Counts articles imported from the Ghost blog at `blog_url`.
 
   Imported articles store their Ghost page URL as the `canonical_uri` on a `Peered` row, so we count the rows whose `canonical_uri` starts with the blog URL. Pass the blog's public site URL (the Ghost Content API `settings.url`, which is what article URLs actually use) — falling back to the configured `GHOST_URL` when unknown. Returns an integer, or `nil` when no usable URL is available.

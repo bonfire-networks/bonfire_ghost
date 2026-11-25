@@ -159,6 +159,13 @@ GHOST_ADMIN_API_KEY=id:secret   # optional, enables members &amp; gated login</p
               />
             </form>
 
+            <Bonfire.UI.Common.ImportSanitiseSettingLive
+              id="ghost_sanitise"
+              data_role="ghost_sanitise_form"
+              keys={[:bonfire_ghost, :sanitise]}
+              current_value={Bonfire.Ghost.sanitise()}
+            />
+
             <form phx-submit="Bonfire.Common.Settings:save">
               <Bonfire.UI.Common.SettingsInputLive
                 keys={[:bonfire_ghost, :auto_import_tag]}

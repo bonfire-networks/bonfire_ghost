@@ -14,7 +14,9 @@ defmodule Bonfire.Ghost.Web.GhostSettingsScopeTest do
     {:ok, conn: conn(user: me, account: account)}
   end
 
-  test "a person's own settings for the Ghost extension show no Ghost settings card", %{conn: conn} do
+  test "a person's own settings for the Ghost extension show no Ghost settings card", %{
+    conn: conn
+  } do
     conn
     |> visit("/settings/user/bonfire_ghost")
     # the control: the extension's settings page itself renders

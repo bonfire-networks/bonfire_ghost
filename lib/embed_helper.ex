@@ -285,7 +285,8 @@ defmodule Bonfire.Ghost.EmbedHelper do
                canonical_url: url,
                uploaded_media: primary_image_attachment(article)
              },
-             [boundary: boundary, to_circles: to_circles] ++ Routing.publish_opts(context)
+             [boundary: boundary, to_circles: to_circles, sanitise: Ghost.sanitise()] ++
+               Routing.publish_opts(context)
            ) do
       report_import_stage(opts, :saving_canonical_uri)
       {:ok, post}
@@ -297,13 +298,18 @@ defmodule Bonfire.Ghost.EmbedHelper do
          {:ok, author} <- require_author(article, opts),
          :ok <- report_import_stage(opts, :editing_post),
          {:ok, _updated} <-
-           Bonfire.Social.PostContents.edit(author, post_id, %{
-             post_content: %{
-               name: article["title"],
-               summary: article["custom_excerpt"],
-               html_body: article["html"] || ""
-             }
-           }),
+           Bonfire.Social.PostContents.edit(
+             author,
+             post_id,
+             %{
+               post_content: %{
+                 name: article["title"],
+                 summary: article["custom_excerpt"],
+                 html_body: article["html"] || ""
+               }
+             },
+             sanitise: Ghost.sanitise()
+           ),
          :ok <- report_import_stage(opts, :loading_updated_post),
          {:ok, post} <- read_imported(post_id, author),
          # a new feature image replaces the old one, as WordPress's sync does

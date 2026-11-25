@@ -36,7 +36,7 @@ defmodule Bonfire.Ghost.Web.GhostSettingsGroupTest do
     end)
 
     # what the forms save is instance settings, which are global config and outlive the test (and its users, which the sandbox rolls back): put them back for the tests that run after
-    for key <- [:auto_import_as, :post_into_group] do
+    for key <- [:auto_import_as, :post_into_group, :sanitise] do
       previous = Application.fetch_env(:bonfire_ghost, key)
 
       on_exit(fn ->
@@ -97,5 +97,58 @@ defmodule Bonfire.Ghost.Web.GhostSettingsGroupTest do
 
     assert Bonfire.Ghost.auto_import_as() == admin.id
     assert Bonfire.Ghost.post_into_group() == topic.id
+  end
+
+  describe "how imported articles are sanitised" do
+    test "keeping their structure is picked unless another choice was made", %{conn: conn} do
+      put_setting(:sanitise, nil)
+
+      conn
+      |> visit(@page)
+      |> wait_async()
+      |> assert_has("[data-role=ghost_sanitise_form] option[selected]",
+        text: "Keep their structure"
+      )
+    end
+
+    test "an admin picks another choice, and it's stored", %{conn: conn} do
+      put_setting(:sanitise, nil)
+
+      conn
+      |> visit(@page)
+      |> wait_async()
+      |> within("[data-role=ghost_sanitise_form]", fn session ->
+        select(session, "Strict: basic formatting only", from: "Sanitising")
+      end)
+
+      assert Bonfire.Ghost.sanitise() == :strict
+    end
+
+    # unsafe is only settable in config, so the form doesn't offer it
+    test "unsafe isn't offered", %{conn: conn} do
+      put_setting(:sanitise, nil)
+
+      conn
+      |> visit(@page)
+      |> wait_async()
+      |> assert_has("[data-role=ghost_sanitise_form] option",
+        text: "Strict: basic formatting only"
+      )
+      |> refute_has("[data-role=ghost_sanitise_form] option", text: "Unsafe (no sanitising)")
+      |> refute_has("[data-role=ghost_sanitise_form]", text: "could run script")
+    end
+
+    # set in config, it shows as the current choice, with its warning, so saving the form doesn't change it unseen
+    test "a site set to unsafe shows it, with a warning", %{conn: conn} do
+      put_setting(:sanitise, :unsafe)
+
+      conn
+      |> visit(@page)
+      |> wait_async()
+      |> assert_has("[data-role=ghost_sanitise_form] option[selected]",
+        text: "Unsafe (no sanitising)"
+      )
+      |> assert_has("[data-role=ghost_sanitise_form]", text: "could run script")
+    end
   end
 end

@@ -1079,4 +1079,119 @@ defmodule Bonfire.Ghost.EmbedHelperTest do
       assert Bonfire.Ghost.imported_articles_count(nil) == nil
     end
   end
+
+  # An article's `html` is written by any of the blog's staff, and its HTML card takes raw markup. How it's sanitised is the admin's choice (`Bonfire.Ghost.sanitise/0`): unset keeps what was stored before that was a choice (the strict sanitiser: no script tag nor event attribute, and no card structure either; what's left of a script is its text)
+  describe "import_article/2 the article's body" do
+    setup do
+      author = Fake.fake_user!(%{}, %{username: "ghostbot"})
+      Process.put([:bonfire_ghost, :auto_import_as], author.id)
+      :ok
+    end
+
+    @card_html ~s|<p>Intro</p><figure class="kg-card kg-image-card kg-card-hascaption"><img src="https://blog.test/content/images/a.jpg" class="kg-image" alt="A view" loading="lazy"><figcaption>The view</figcaption></figure><!--kg-card-begin: html--><script>alert(1)</script><!--kg-card-end: html--><figure class="kg-card kg-bookmark-card"><a class="kg-bookmark-container" href="https://example.com/page"><div class="kg-bookmark-content"><div class="kg-bookmark-title">A page</div></div><div class="kg-bookmark-thumbnail"><img src="https://example.com/t.jpg" alt="" onerror="this.style.display = 'none'"></div></a></figure><p>Outro</p>|
+
+    defp stored_body(post),
+      do: Bonfire.Common.Repo.get!(Bonfire.Data.Social.PostContent, post.id).html_body
+
+    # unset is the imported scrubber: nothing that could run, and the cards' figures and captions kept
+    test "unset: as imported" do
+      assert {:ok, post} = EmbedHelper.import_article(%{article() | "html" => @card_html})
+      body = stored_body(post)
+
+      assert body =~ "Outro"
+      refute body =~ "<script"
+      refute body =~ "alert(1)"
+      refute body =~ "onerror"
+      assert body =~ ~s|<figure class="kg-card kg-image-card kg-card-hascaption">|
+    end
+
+    test "strict: no script tag nor event attribute is stored, nor the cards' structure" do
+      Process.put([:bonfire_ghost, :sanitise], :strict)
+      assert {:ok, post} = EmbedHelper.import_article(%{article() | "html" => @card_html})
+      body = stored_body(post)
+
+      # the control: the article's text is there
+      assert body =~ "Intro"
+      assert body =~ "Outro"
+      refute body =~ "<script"
+      refute body =~ "onerror"
+      refute body =~ "<figure"
+    end
+
+    test "strict: the same on update" do
+      Process.put([:bonfire_ghost, :sanitise], :strict)
+      assert {:ok, post} = EmbedHelper.import_article(article())
+
+      assert {:ok, _} =
+               EmbedHelper.import_article(%{
+                 article()
+                 | "html" => @card_html,
+                   "title" => "Edited"
+               })
+
+      body = stored_body(post)
+
+      assert body =~ "Outro"
+      refute body =~ "<script"
+      refute body =~ "onerror"
+      refute body =~ "<figure"
+    end
+
+    test "imported: nothing that could run is stored, and a card's figure and caption are kept" do
+      Process.put([:bonfire_ghost, :sanitise], :imported)
+      assert {:ok, post} = EmbedHelper.import_article(%{article() | "html" => @card_html})
+      body = stored_body(post)
+
+      assert body =~ "Outro"
+      refute body =~ "<script"
+      refute body =~ "alert(1)"
+      refute body =~ "onerror"
+      assert body =~ ~s|<figure class="kg-card kg-image-card kg-card-hascaption">|
+      assert body =~ "<figcaption>The view</figcaption>"
+    end
+
+    test "imported: the same on update" do
+      Process.put([:bonfire_ghost, :sanitise], :imported)
+      assert {:ok, post} = EmbedHelper.import_article(article())
+
+      assert {:ok, _} =
+               EmbedHelper.import_article(%{
+                 article()
+                 | "html" => @card_html,
+                   "title" => "Edited"
+               })
+
+      body = stored_body(post)
+
+      refute body =~ "<script"
+      refute body =~ "onerror"
+      assert body =~ ~s|<figure class="kg-card kg-image-card kg-card-hascaption">|
+      assert body =~ "<figcaption>The view</figcaption>"
+    end
+
+    test "unsafe: the HTML is stored as it came" do
+      Process.put([:bonfire_ghost, :sanitise], :unsafe)
+      assert {:ok, post} = EmbedHelper.import_article(%{article() | "html" => @card_html})
+      body = stored_body(post)
+
+      assert body =~ ~s|<figure class="kg-card kg-image-card kg-card-hascaption">|
+      assert body =~ "<script>alert(1)</script>"
+    end
+
+    # a title is never the source's HTML, whatever the body's choice
+    test "unsafe: the title is still sanitised" do
+      Process.put([:bonfire_ghost, :sanitise], :unsafe)
+
+      assert {:ok, post} =
+               EmbedHelper.import_article(%{
+                 article()
+                 | "html" => @card_html,
+                   "title" => "<script>alert(2)</script>Title"
+               })
+
+      content = Bonfire.Common.Repo.get!(Bonfire.Data.Social.PostContent, post.id)
+      refute content.name =~ "<script"
+      assert content.name =~ "Title"
+    end
+  end
 end
